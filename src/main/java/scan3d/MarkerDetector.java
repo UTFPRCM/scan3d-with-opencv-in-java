@@ -29,6 +29,11 @@ public final class MarkerDetector {
         public boolean complete() {
             return triangles.size() == 2 && squares.size() == 2;
         }
+
+        /** Exatamente 3 marcadores: 2 triângulos + 1 quadrado, ou 1 triângulo + 2 quadrados. */
+        public boolean partial() {
+            return (triangles.size() == 2 && squares.size() == 1) || (triangles.size() == 1 && squares.size() == 2);
+        }
     }
 
     /** Quatro centros na ordem do modelo 3D: tri0, sq0, tri1, sq1. */
@@ -123,7 +128,7 @@ public final class MarkerDetector {
         return new MarkerSet(t[0], s[0], t[1], s[1]);
     }
 
-    private static Point[] sortAlong(Point x, Point a, Point b) {
+    static Point[] sortAlong(Point x, Point a, Point b) {
         double cross = x.x * (b.y - a.y) - x.y * (b.x - a.x);
         return cross > 0 ? new Point[] {a, b} : new Point[] {b, a};
     }

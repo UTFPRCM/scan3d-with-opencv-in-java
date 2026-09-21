@@ -1,11 +1,11 @@
 ---
 name: scan3d-pose-geometry
-description: Explica e verifica a geometria do projeto scan3d - modelo pinhole, matriz intrínseca K, extrínsecos [R|t], solvePnP, Rodrigues, homografia do plano da folha e conversão esférica - e aponta onde o PointCloudBuilder se afasta da teoria. Use ao interpretar rvec/tvec, ângulos ou pontos 3D.
+description: Explica e verifica a geometria do projeto scan3d - modelo pinhole, matriz intrínseca K, extrínsecos [R|t], solvePnP, P3P com 3 marcadores, Rodrigues e a nuvem por lâminas - e a montagem da nuvem por lâminas (azimute da câmera, interseção raio-plano, centro do objeto). Use ao interpretar rvec/tvec, ângulos ou pontos 3D.
 ---
 
 # Geometria de pose do scan3d
 
-Use com `README.md` (seções "Fundamentos" e "De pixels para pontos 3D") e `src/main/java/scan3d/` (`PoseEstimator`, `PointCloudBuilder`, `MarkerDetector.order`).
+Use com `README.md` (seções "Fundamentos" e "Da silhueta à nuvem 3D (lâminas)") e `src/main/java/scan3d/` (`PoseEstimator`, `LaminaCloudBuilder`, `MarkerDetector.order`).
 
 ## Modelo
 
@@ -29,16 +29,26 @@ s [u v 1]^T = K [R | t] [X Y Z 1]^T
 
 A correspondência só é válida se a ordem física dos quatro centros bater com a dos pontos 3D. `MarkerDetector.order` garante isso pela orientação: a câmera vê a folha de cima, então o sinal do produto vetorial (eixo triângulo→quadrado) × (eixo entre as duas formas iguais) fixa quem é a "0" e quem é a "1", em qualquer rotação da folha. Usar o centro do círculo mínimo no lugar do centroide desloca o triângulo (cai no meio da hipotenusa) e distorce o modelo em ~9 mm.
 
-## Pixel → plano da folha
+## Da silhueta à nuvem: lâminas (`LaminaCloudBuilder`)
 
-Com `Z = 0`, `s·[u v 1]^T = K [r1 r2 t] [X Y 1]^T`. Logo `[X Y 1]^T ∝ inv(K [r1 r2 t]) · [u v 1]^T`. É o que `calcMatrizInversa` faz (matriz 3×3 formada pelas colunas 0, 1 de `R` e por `t`, multiplicada por `K`, invertida com Jama), e o que `pointCloudConstruction` usa com a divisão por `c`.
+Cada contorno é tratado como uma lâmina 2D em pé, no plano vertical que contém o eixo Z (pelo centro da folha, `(W/2, H/2)`), perpendicular à direção horizontal de visada.
 
-`PointCloudBuilder` implementa isso. Consequências para revisar:
+- **Ângulo do quadro**: `azimute = atan2(C.y − O.y, C.x − O.x)`, com `C = −Rᵀt` (posição da câmera) e `O` o centro da folha; relativo ao primeiro quadro. Não é `rz` de Euler. Nas fotos de exemplo cobre −86° a +80°.
+- **Posição de cada pixel**: raio `dir = Rᵀ·((u−cx)/fx, (v−cy)/fy, 1)` a partir de `C`, intersectado com o plano de normal `n = (cos az, sin az, 0)` por `O`: `λ = n·(O−C)/(n·dir)`. Então `d = (X−O)·t` (deslocamento no plano) e `h = −X.z` (o Z do mundo aponta para a mesa). Isso é exato para pontos do plano e trata perspectiva/inclinação sem fator de escala à parte. (Usar uma escala única por quadro medida na base do eixo superestimava o raio em ~6% no topo com câmera a ~300 mm e elevação de 20°; o teste sintético pegou.)
+- **Unidade**: mm × `refScale`, com `refScale` = px/mm do 1º quadro na altura do eixo. É só mudança de unidade constante: a escala fica linear entre quadros. Fica no cabeçalho do PLY.
+- **Silhueta**: para cada altura, extremos esquerdo e direito; exato para corpos de revolução. Topo e base ficam de fora (elipses deslocadas pela elevação da câmera, `~R·tan(elevação)`).
+- **Centro do objeto**: se o objeto está a `e` do eixo, a média dos extremos em cada quadro vale `e·t`. Estima-se `e` por mínimos quadrados robustos (Huber) e recentra-se. Sem isso o raio varia de ~11 mm com o ângulo (nas fotos de exemplo); com isso, 1 a 2 mm. Requer ângulos suficientemente variados (planos quase paralelos não determinam `e`).
+- **Volta**: cada lâmina é bilateral e a vista oposta cai no mesmo plano; azimutes cobrindo A° fecham ~2·A° (`coverageDegrees()`).
+- **Limite**: fora de corpos de revolução, o ponto da borda vai para o plano do eixo (não para a profundidade real), então faces planas "estufam". A versão geral é o visual hull.
 
-1. Só vale para pontos **no plano** `Z = 0`. Um ponto do contorno do objeto está acima da folha; com uma vista só, o raio da câmera é ambíguo e cai num ponto errado do plano. Reconstruir a altura exige mais de um quadro (interseção de raios ou silhuetas). É por isso que a nuvem atual tem `z` de −791 a +376 mm para um objeto de ~10 cm.
-2. O código usa `b/c` (o `Y` no plano) como `raio` esférico e descarta `a/c` (`X`). Confirme se essa era a intenção antes de reaproveitar.
-3. A conversão `x = r sinθ sinφ; y = r cosθ sinφ; z = r cosφ` usa `θ = rz` e `φ = |ry|` do quadro como se fossem os ângulos de posição do ponto. É uma convenção do autor original; não é consequência direta de `[R|t]`.
-4. Correções já feitas em relação ao original: os ângulos eram passados em graus a `Math.sin/cos`, e `θ < 0` usava `360 - θ` (390° para −30°) em vez de `360 + θ`. Convenção de ângulos: Z-Y-X, `rx = atan2(R21, R22)`, `ry = atan2(-R20, √(R00²+R10²))`, `rz = atan2(R10, R00)`; valide contra uma rotação conhecida antes de confiar.
+## Pose com 3 marcadores (P3P)
+
+`PoseEstimator.estimateFromThree`. Com 3 pontos `solvePnP` não serve; usa-se `Calib3d.solveP3P` (`SOLVEPNP_AP3P`), que devolve até 4 soluções. Duas ambiguidades:
+
+1. **Identidade** do marcador que aparece uma só vez (é o "0" ou o "1"?). Decidir só pela geometria da imagem acerta ~71%; por isso as duas hipóteses são testadas.
+2. **Solução do P3P.** Descartam-se as fisicamente impossíveis (`tz <= 0` ou câmera abaixo da folha, `C.z >= 0`, pois o Z do mundo aponta para a mesa). Das restantes, vale a mais próxima (posição da câmera) de um quadro vizinho com 4 marcadores.
+
+Os dois marcadores do mesmo tipo são ordenados pela mesma regra de orientação usada com 4. Só se aceita se ficar a até 60 mm × (distância em quadros) e 30° da referência. Não há erro de reprojeção com 3 pontos (ajuste exato). Medido (câmera aproximada, referência = pose de 4 marcadores): 97% dentro de 30 mm/5°, mediana 2,8 mm e 0,5°; encadeamento de até 8 saltos sem acúmulo de erro, porque cada pose é um P3P independente.
 
 ## Checagens numéricas úteis
 
@@ -49,4 +59,4 @@ Com `Z = 0`, `s·[u v 1]^T = K [r1 r2 t] [X Y 1]^T`. Logo `[X Y 1]^T ∝ inv(K [
 
 ## Ao propor melhorias
 
-Prefira, nesta ordem: recalibrar; ordenar marcadores; validar por reprojeção; exportar `R`, `t` por quadro; e só então substituir a homografia por interseção de silhuetas (visual hull) ou triangulação. Não "corrija" a fórmula esférica sem antes definir eixos, unidade e convenção de ângulos.
+Prefira, nesta ordem: recalibrar; validar por reprojeção; segmentar o objeto (silhueta preenchida); e só então trocar as lâminas pelo visual hull (interseção das silhuetas esticadas) para objetos que não são de revolução. Ao mexer no `LaminaCloudBuilder`, confira com o cilindro sintético do teste (raio igual em todos os ângulos e distâncias).

@@ -16,6 +16,8 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <!-- org.openpnp:opencv embute as bibliotecas nativas (macOS arm64/x64, Linux, Windows) -->
     <opencv.version>4.9.0-0</opencv.version>
+    <!-- JavaFX (janela e botões); o Maven escolhe sozinho o classificador do sistema (mac-aarch64, linux, win) -->
+    <javafx.version>21.0.12</javafx.version>
   </properties>
 
   <dependencies>
@@ -23,6 +25,11 @@
       <groupId>org.openpnp</groupId>
       <artifactId>opencv</artifactId>
       <version>${opencv.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.openjfx</groupId>
+      <artifactId>javafx-controls</artifactId>
+      <version>${javafx.version}</version>
     </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
@@ -62,6 +69,7 @@
                     <exclude>META-INF/*.SF</exclude>
                     <exclude>META-INF/*.DSA</exclude>
                     <exclude>META-INF/*.RSA</exclude>
+                    <exclude>module-info.class</exclude>
                   </excludes>
                 </filter>
               </filters>
