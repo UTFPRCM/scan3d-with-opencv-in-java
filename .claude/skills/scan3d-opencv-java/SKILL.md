@@ -1,60 +1,47 @@
 ---
 name: scan3d-opencv-java
-description: Visão geral e roteiro de investigação do protótipo legado de reconstrução 3D em Java/OpenCV 2.4 (Example01 e Example02). Use para localizar código, entender o pipeline marcador → pose → contorno → nuvem de pontos, interpretar TextMatrix.txt, in/ e out/, e separar o que está implementado do que está comentado.
+description: Visão geral e roteiro de investigação do projeto scan3d (reconstrução 3D com OpenCV 4 e Java 21 a partir de fotos 360° com marcador planar). Use para localizar código, entender o pipeline marcador → pose → contorno → nuvem de pontos, interpretar TextMatrix.txt, poses.csv, cloud.ply, in/ e out/, ou decidir o próximo passo.
 ---
 
-# Scan3D OpenCV Java
+# scan3d
 
-Repositório de um protótipo de 2018: reconstruir um objeto em 3D a partir de fotos ao redor dele (360°), usando um marcador impresso numa folha A4. Tudo é orientado a arquivos (lê JPGs de uma pasta); não há testes nem build automatizado. **Regra principal: separe o que roda, o que está comentado e o que era só intenção.**
+Projeto Maven único (`pom.xml`, pacote `scan3d`). Nasceu de dois protótipos de 2018 em OpenCV 2.4 (Example01 e Example02), unificados com o Example02 como base; o histórico deles está no git. Para a explicação completa, leia `README.md`. Matemática: skill `scan3d-pose-geometry`. Rodar/depurar/evoluir: skill `scan3d-legacy-run-port`.
 
-Para a explicação completa, leia `README.md`. Para matemática, use a skill `scan3d-pose-geometry`; para rodar ou portar, `scan3d-legacy-run-port`.
+## Mapa do código (`src/main/java/scan3d`)
 
-## Mapa do código
-
-| Arquivo | Papel |
+| Classe | Papel |
 | --- | --- |
-| `projects/OpenCv-Java-Example01/src/mainOpenCv/MainActivity.java` | Detecta 2 quadrados + 2 triângulos (exige exatamente 2+2); grava foto anotada em `out/`. `project3d` (cubo com `projectPoints`) está comentado no fluxo. |
-| `projects/OpenCv-Java-Example02/src/mainOpenCv/MainActivity.java` | Filtros diferentes, tolerância maior, `calcSolvepnp` ativo; `maskImage` e todos os `imwrite` **comentados**. |
-| `.../Example02/.../PointsObjectInFrame.java` | Inversa de `K[r1 r2 t]`, `calcAngle`, `pointCloudConstruction` (só imprime N×3). Nada o alimenta hoje. |
-| `.../Example02/.../MainCvinGL`, `OpenCVImageInGL`, `OpenCVGLTexture` | Experimento JOGL: desenha linhas/eixos de teste, não recebe nuvem. |
-| `.../src/mainOpenCv/CalibChessBoard.java~` | Único vestígio da calibração (tabuleiro 8×6, 50 mm, `CALIB_FIX_PRINCIPAL_POINT`). É backup de editor, não compila no projeto. |
-| `TextMatrix.txt` | Matriz **intrínseca** `fx,0,cx,0,fy,cy,0,0,1`. |
-| `in/800x480 com objeto/` | 129 fotos 800×480 de um pote sobre a folha. |
-| `out/` | 10 `*.matMask.jpg`: contorno fino do objeto (não é máscara preenchida). |
-| `docs/img/` | Figuras; algumas são de terceiros e ilustram o conceito (`mascara.png`, `escala-de-cinza-contornos.png`, `detectacao-objeto-retangular.png`, `nuvem-de-pontos.jpg`, `objeto-nuvem-de-pontos-modelo-3d.png`), **não** são saídas deste código. |
-| `lib/` | `opencv-2413.jar`, `libopencv_java2413.so` (ELF Linux). |
+| `Main` | CLI: `scan` e `calibrate`. |
+| `Pipeline` | Percorre a pasta, chama as etapas e grava `annotated/`, `contours/`, `poses.csv`, `cloud.ply`. |
+| `MarkerDetector` | Bordas → contornos → triângulos (3 vértices) e quadrados (4) com teste escuro/claro → centroides → **ordem por orientação** (`order`). |
+| `PoseEstimator` / `Pose` | `solvePnP` com o modelo 187 × 161 mm (Z = 0); ângulos Z-Y-X; erro de reprojeção. |
+| `ObjectContour` | Contorno do objeto: contém o centro da folha e nenhum marcador. Saída fina, não preenchida. |
+| `PointCloudBuilder` | `inv(K·[r1 r2 t])` + coordenadas esféricas (fórmula do original, com correções de radianos e de θ). |
+| `PlyWriter` | PLY ASCII com propriedade `frame`. |
+| `CameraMatrix` | Lê/grava `TextMatrix.txt` (9 valores, ou 11 com resolução); `approximate`, `forImage`, `check`. |
+| `Calibrator` | Calibração com tabuleiro de xadrez (portado de `CalibChessBoard.java~`). |
 
-## Fluxo real (Example02)
+Dados: `in/800x480 com objeto/` (129 fotos de teste), `out/` (**10 saídas históricas de 2018**, não geradas pelo código atual), `output/` (saída atual, ignorada pelo git), `docs/img/` (figuras; várias são de terceiros e ilustram o conceito), `lib/` (legado OpenCV 2.4, sem uso), `TextMatrix.txt` (K de 2018).
 
-`processImages` → `imread` → `imgproc1` (cinza → adaptiveThreshold MEAN → Canny → dilate) → `findObjects` (contornos → `approxPolyDP` → classifica por área) → `storesCentroid` → `calcSolvepnp`. Aí termina: `rvec`/`tvec` são locais e o resultado é descartado.
+## Fatos que costumam confundir
+
+- `TextMatrix.txt` é a matriz **intrínseca** K, calibrada para ~351 × 287 px. As fotos são 800 × 480, então o programa avisa; com `--approx-camera` o erro de reprojeção mediano é ~1,2 px, sem ele ~26 px.
+- `rvec`/`tvec` são extrínsecos **por quadro**; ficam em `poses.csv` (`tx,ty,tz` em mm; `rx,ry,rz` em graus).
+- Quadros com menos de 2 triângulos + 2 quadrados são **descartados** (72 de 129 usados nas fotos de exemplo). Costuma faltar o triângulo de trás, escondido pelo objeto.
+- O contorno do objeto é **fragmentado**; a nuvem de pontos não é geometricamente confiável (z de −791 a +376 mm para um pote de ~10 cm).
+- JOGL e Jama foram removidos de propósito. A visualização 3D será refeita com outra biblioteca; a entrada esperada é `cloud.ply`.
 
 ## Roteiro de investigação
 
-1. Identifique o exemplo e o ponto de entrada (`mainOpenCv.MainActivity`).
-2. Confirme a pasta de entrada: `test0()` tem o caminho fixo `/home/jose/Documentos/Opencv` e o `TextMatrix.txt` é lido dessa mesma pasta.
-3. Antes de interpretar pose, confira que há exatamente 4 formas e a ordem dos pontos (`tri0, sq0, tri1, sq1` no Ex.02; outra ordem no Ex.01).
-4. Trate `TextMatrix.txt` como `K` (intrínseco) e `rvec`/`tvec` por quadro como extrínseco. Os nomes no código estão trocados: `paramExtrinseco(cameraMat)` recebe `K`; `paramIntrinseco(rvec, tvec)` recebe extrínsecos.
-5. Para nuvem de pontos, confirme se `maskImage`, `paramIntrinseco`, `paramExtrinseco` estão descomentados e se `mask`, `rvec`, `tvec`, `theta`, `phi` foram preenchidos antes de `pointCloudConstruction`.
-6. Verifique se a saída pedida é de fato persistida: a nuvem só é impressa com `System.out.println`.
+1. Rode `./scan3d.sh scan --approx-camera --out output/x` e abra `output/x/annotated/`: os eixos e a moldura verde devem ficar sobre a folha.
+2. Leia `poses.csv`: `reproj_rms_px` alto ⇒ K ruim ou marcadores trocados; `points` = 0 ⇒ contorno não encontrado.
+3. Para um quadro descartado, veja a mensagem (`N triângulo(s) e M quadrado(s)`) e desenhe o que o detector viu (formas e círculos) antes de mexer em limiares.
+4. Só depois olhe `cloud.ply` (MeshLab/CloudCompare).
 
-## Armadilhas confirmadas
+## Ordem segura para evoluir
 
-- `K` foi calibrada em imagem de ~351×287 (`cx=175.5`, `cy=143.5`, ponto principal fixo no centro); as fotos são 800×480. Recalibrar ou reescalar antes de confiar em valores numéricos.
-- Ex.02: `listSquares.size() >= 0 && listTriangles.size() >= 0` é sempre verdadeiro; `calcSolvepnp` faz `.get(1)` e quebra com menos de 2+2 formas.
-- Ordem dos marcadores vem da enumeração de contornos, sem garantia semântica.
-- Ex.01 usa modelo 161×187 mm e Ex.02 187×161 mm; medido no gabarito, 187 mm é a distância horizontal.
-- Ex.01 `project3d` mistura `centerSquare.get(0).center.x` com `centerSquare.get(1).center.y`.
-- `pointCloudConstruction` conta com `> 150` e preenche com `> 200`: sobram linhas zeradas.
-- `distCoeffs` são zeros.
-- API antiga do OpenCV 2.4 (`Highgui`, `Core.circle`); `.so` só serve em Linux x86-64.
-- `.classpath` tem caminhos absolutos de `/home/jose/...`; jars JOGL não estão no repositório.
-
-## Ordem segura para estender
-
-1. Receber pastas de entrada/saída por argumento.
-2. Validar e ordenar os 4 marcadores.
-3. Recalibrar na resolução das fotos.
-4. Persistir `rvec`, `tvec`, id do quadro e ângulo.
-5. Exportar pontos (`x,y,z,frame`) em CSV/PLY/XYZ, com sistema de coordenadas e unidade documentados.
-6. Criar um teste de regressão pequeno com 2 ou 3 fotos de `in/`.
-7. Só então visualizar (MeshLab/CloudCompare) ou migrar para Android.
+1. Recalibrar na resolução real e usar `distCoeffs`.
+2. Segmentar o objeto contra o papel branco (silhueta preenchida).
+3. Cruzar silhuetas de vários quadros (*visual hull*) no lugar da homografia de plano único.
+4. Só então o visualizador.
+Mude uma etapa por vez e reconfira `reproj_rms_px`, a contagem de quadros usados e `mvn test`.

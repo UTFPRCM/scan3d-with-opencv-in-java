@@ -1,14 +1,14 @@
 # Reconstrução 3D com OpenCV e Java
 
-Protótipo (2018) para **reconstruir objetos em 3D a partir de fotos tiradas ao redor deles**, usando apenas uma câmera comum e uma folha A4 impressa com um marcador de referência. A ideia era rodar em Android; a primeira versão foi feita em Java "puro" no Eclipse (Linux) com OpenCV 2.4.
+Protótipo (2018) para **reconstruir objetos em 3D a partir de fotos tiradas ao redor deles**, usando apenas uma câmera comum e uma folha A4 impressa com um marcador de referência. A primeira versão foi feita em Java no Eclipse (Linux) com OpenCV 2.4, pensando em rodar depois em Android. Hoje o repositório é **um único projeto Maven** (Java 21, OpenCV 4.9) que roda no macOS, incluindo Apple Silicon.
 
 <p align="center">
-  <img src="in/800x480%20com%20objeto/Image-2018-05-24%2012_29_42_071.jpg" width="48%" alt="Foto de entrada: pote sobre a folha com marcador">
-  <img src="out/Image-2018-05-24%2012_29_42_071.matMask.jpg" width="48%" alt="Saída: contorno (silhueta) do pote">
+  <img src="docs/img/resultado-pose-frente.jpg" width="48%" alt="Saída: marcadores, IDs, moldura do modelo e eixos da pose (vista frontal)">
+  <img src="docs/img/resultado-pose-tras.jpg" width="48%" alt="Saída: o mesmo, visto do lado oposto da volta">
 </p>
-<p align="center"><em>Entrada (<code>in/</code>) e saída (<code>out/</code>) do mesmo quadro: os quatro marcadores ficam na folha; o processamento isola o contorno do objeto.</em></p>
+<p align="center"><em>Saída real do projeto unificado em dois quadros com ~180° de diferença: T0/S0/T1/S1 são os marcadores identificados, o retângulo verde é o modelo reprojetado com a pose estimada, e os eixos são X (vermelho), Y (verde) e Z (azul, para cima da folha).</em></p>
 
-> **Status:** protótipo de pesquisa, **incompleto**. Detecta os marcadores, estima a pose da câmera e isola o contorno do objeto. A **nuvem de pontos 3D não é gravada nem visualizada**. Veja [O que funciona e o que não funciona](#o-que-funciona-e-o-que-não-funciona).
+> **Status:** protótipo de pesquisa. O pipeline roda de ponta a ponta e grava `poses.csv` e `cloud.ply`, mas a **nuvem de pontos ainda não é geometricamente confiável** (contornos fragmentados, projeção de um plano só) e **não há visualizador 3D** (será acrescentado depois com uma biblioteca Java moderna). Veja [O que funciona e o que não funciona](#o-que-funciona-e-o-que-não-funciona).
 
 ## Sumário
 
@@ -18,7 +18,7 @@ Protótipo (2018) para **reconstruir objetos em 3D a partir de fotos tiradas ao 
 4. [Fundamentos: câmera, calibração e pose](#fundamentos-câmera-calibração-e-pose)
 5. [De pixels para pontos 3D](#de-pixels-para-pontos-3d)
 6. [O que funciona e o que não funciona](#o-que-funciona-e-o-que-não-funciona)
-7. [Example01 × Example02](#example01--example02)
+7. [Do legado ao projeto unificado](#do-legado-ao-projeto-unificado)
 8. [Estrutura do repositório](#estrutura-do-repositório)
 9. [Como executar](#como-executar)
 10. [Próximos passos](#próximos-passos)
@@ -56,7 +56,7 @@ Os quatro centros são os pontos de correspondência 3D↔2D do `solvePnP`. O c�
    tri1 (0, 161)    ────── 187 mm ──────   sq1 (187, 161)
 ```
 
-Conferi as medidas sobre o gabarito (A4 = 297 × 210 mm): o espaçamento horizontal dá ≈ 189 mm e o vertical ≈ 160 mm, coerente com 187 × 161 mm do Example02.
+Conferi as medidas sobre o gabarito (A4 = 297 × 210 mm): usando o centroide dos triângulos, o espaçamento horizontal dá ≈ 185 mm e o vertical ≈ 160 mm, coerente com os 187 × 161 mm do modelo. (O centro do círculo mínimo, usado no código antigo, cai no meio da hipotenusa e daria ≈ 178 mm.)
 
 ## Pipeline
 
@@ -65,36 +65,39 @@ flowchart LR
     A[Foto JPG] --> B[Cinza]
     B --> C[Limiar adaptativo]
     C --> D[Canny + dilatação]
-    D --> E[Contornos]
-    E --> F[Classifica quadrados e triângulos]
-    F --> G[Centros em pixels]
+    D --> E["Fechamento + contornos"]
+    E --> F["Triângulo (3 vért.) / quadrado (4 vért.) + teste de cor"]
+    F --> G["Centroides + ordenação por orientação"]
     G --> H["solvePnP → rvec, tvec"]
     H --> I["Rodrigues → R, ângulos"]
-    D --> J[Contorno do objeto]
+    D --> J["Contorno do objeto (centro da folha)"]
     I --> K["inv(K·[r1 r2 t])"]
     J --> K
-    K --> L[Pontos N×3]
-    L -.não implementado.-> M[(Arquivo PLY/XYZ)]
-    M -.não implementado.-> N[Visualização 3D]
+    K --> L[Pontos N×3 por quadro]
+    L --> M[(cloud.ply + poses.csv)]
+    M -.futuro.-> N[Visualização 3D]
 ```
 
-| Etapa | Método OpenCV | Onde |
+| Etapa | Método OpenCV | Classe |
 | --- | --- | --- |
-| Ler imagens | `Highgui.imread` | `processImages` |
-| Bordas | `cvtColor` → `adaptiveThreshold` → `Canny` → `dilate` | `imgproc1` (Ex.02) / `imgproc` (Ex.01) |
-| Formas | `findContours` → `approxPolyDP` → `contourArea`, `minEnclosingCircle`, `minAreaRect` | `findObjects` |
-| Centros | `minEnclosingCircle` de cada forma aceita | `storesCentroid` |
-| Pose | `Calib3d.solvePnP` | `calcSolvepnp` (Ex.02) / `project3d` (Ex.01) |
-| Contorno do objeto | maior contorno por área + `drawContours` | `maskImage` |
-| Pixel → mundo | `Rodrigues`, inversa de `K[R\|t]` (Jama) | `PointsObjectInFrame` |
+| Bordas | `cvtColor` → `adaptiveThreshold` (MEAN) → `Canny` → `dilate` | [`MarkerDetector.edges`](src/main/java/scan3d/MarkerDetector.java) |
+| Formas | `morphologyEx(CLOSE)` → `findContours` → `approxPolyDP` → `isContourConvex` + teste escuro/claro | `MarkerDetector.detect` |
+| Centros e ordem | `moments` (centroide) e produto vetorial | `MarkerDetector.order` |
+| Pose | `Calib3d.solvePnP`, `projectPoints` (erro), `Rodrigues` | [`PoseEstimator`](src/main/java/scan3d/PoseEstimator.java) |
+| Contorno do objeto | `findContours` + regra do "centro da folha" + `drawContours` | [`ObjectContour`](src/main/java/scan3d/ObjectContour.java) |
+| Pixel → 3D | `K·[r1 r2 t]`, inversa, coordenadas esféricas | [`PointCloudBuilder`](src/main/java/scan3d/PointCloudBuilder.java) |
+| Saída | PLY ASCII, CSV, imagens | [`PlyWriter`](src/main/java/scan3d/PlyWriter.java), [`Pipeline`](src/main/java/scan3d/Pipeline.java) |
+| Calibração | `findChessboardCorners` → `calibrateCamera` | [`Calibrator`](src/main/java/scan3d/Calibrator.java) |
 
 <p align="center"><img src="docs/img/escala-de-cinza-contornos.png" width="80%" alt="Cor → cinza → bordas"></p>
 <p align="center"><em>Ilustração genérica da sequência cor → cinza → bordas (figura de referência, não é saída do projeto).</em></p>
 
-**A "máscara" é um contorno, não uma região preenchida.** `maskImage` escolhe o maior contorno da imagem de bordas, desenha-o com espessura 4 em branco e 1 em preto e faz `bitwise_and` com a imagem de bordas. O resultado é a silhueta fina vista em `out/`. Repare também nos pequenos fragmentos soltos (à esquerda do pote na imagem de saída): eles são ruído que passou pelo filtro e entraria na nuvem.
+**Detecção do marcador.** A ordem `tri0, sq0, tri1, sq1` não vem mais da enumeração dos contornos. Em uma volta de 360° o marcador aparece em qualquer rotação (na metade da volta os quadrados ficam à esquerda), então o código usa a orientação: como a câmera vê a folha de cima, o produto vetorial entre o eixo triângulo→quadrado e o eixo entre as duas formas iguais tem sinal fixo, o que identifica qual é a "0" e qual é a "1". Quadros em que os quatro marcadores não são detectados são **descartados**, não adivinhados.
+
+**A "máscara" é um contorno, não uma região preenchida.** [`ObjectContour`](src/main/java/scan3d/ObjectContour.java) escolhe um contorno da imagem de bordas, desenha-o com espessura 4 em branco e 1 em preto e faz `bitwise_and` com as bordas. O original escolhia o *maior* contorno, e um marcador (anel fechado) podia vencer o objeto; agora o candidato precisa ter o centro da folha dentro do seu retângulo envolvente e nenhum marcador dentro dele.
 
 <p align="center"><img src="docs/img/mascara.png" width="70%" alt="Conceito de máscara: imagem, máscara, resultado"></p>
-<p align="center"><em>Conceito de máscara (imagem genérica; a máscara real do projeto é o contorno mostrado no topo).</em></p>
+<p align="center"><em>Conceito de máscara (imagem genérica; a saída real é a silhueta fina em <code>output/contours</code>).</em></p>
 
 ## Fundamentos: câmera, calibração e pose
 
@@ -129,25 +132,26 @@ Pela semelhança de triângulos, com `P` a largura em pixels, `W` a largura real
 
 ### Intrínsecos: `TextMatrix.txt`
 
-Os valores vêm de uma calibração com tabuleiro de xadrez, cujo código sobrou em `CalibChessBoard.java~` (tabuleiro 8×6, quadrados de 50 mm, `CALIB_FIX_PRINCIPAL_POINT`). Ele só imprime a matriz; os números foram copiados à mão para a única linha do arquivo:
+Os valores vêm de uma calibração com tabuleiro de xadrez feita em 2018 (tabuleiro 8×6, quadrados de 50 mm, `CALIB_FIX_PRINCIPAL_POINT`). O código original só imprimia a matriz e os números foram copiados à mão para a única linha do arquivo. Ele foi portado para o comando `calibrate` (veja [Como executar](#como-executar)), que agora grava o arquivo sozinho e, no formato de 11 valores, guarda também a resolução da calibração:
 
 ```text
 fx, 0, cx, 0, fy, cy, 0, 0, 1
-378.8464, 0, 175.5, 0, 378.8464, 143.5, 0, 0, 1
+378.8464, 0, 175.5, 0, 378.8464, 143.5, 0, 0, 1                 (original, 9 valores)
+fx, 0, cx, 0, fy, cy, 0, 0, 1, largura, altura                   (novo, 11 valores)
 ```
 
 <p align="center"><img src="docs/img/circles_pattern.png" width="40%" alt="Padrão de círculos assimétricos do OpenCV"></p>
-<p align="center"><em><code>circles_pattern.png</code>: padrão alternativo de calibração (grade de círculos) que consta em <code>docs/img</code>; o código que sobrou usa tabuleiro de xadrez.</em></p>
+<p align="center"><em><code>circles_pattern.png</code>: padrão alternativo de calibração (grade de círculos) que consta em <code>docs/img</code>; o código usa tabuleiro de xadrez.</em></p>
 
-> ⚠️ **Resolução inconsistente.** `cx = 175.5` e `cy = 143.5` correspondem ao centro de uma imagem de ~351 × 287 px, e a calibração fixou o ponto principal nesse centro. As fotos de `in/` têm **800 × 480** (proporção diferente, 1,67 contra 1,22). Sem recalibrar nessa resolução ou pelo menos reescalar `K`, a pose e a inversão de projeção saem distorcidas. É, provavelmente, a maior fonte de erro numérico do protótipo.
+> ⚠️ **Resolução inconsistente.** `cx = 175.5` e `cy = 143.5` correspondem ao centro de uma imagem de ~351 × 287 px, e a calibração fixou o ponto principal nesse centro. As fotos de `in/` têm **800 × 480** (proporção diferente, 1,67 contra 1,22). Medido no projeto unificado sobre os 72 quadros em que os marcadores foram detectados: com o `TextMatrix.txt` original o erro de reprojeção mediano é **26 px** (máximo 47 px); com uma câmera aproximada (`--approx-camera`: `f` = largura da imagem, ponto principal no centro) cai para **1,2 px**. Por isso o programa avisa quando `K` não combina com a resolução das fotos, e o passo mais importante antes dos testes práticos é recalibrar na resolução real da câmera.
 
-O nome `readMatCamTxt` e alguns comentários dizem "extrínseco", mas o arquivo contém os **intrínsecos**. No `PointsObjectInFrame`, os nomes dos métodos também estão trocados: `paramExtrinseco(cameraMat)` recebe a matriz **intrínseca** e `paramIntrinseco(rvec, tvec)` recebe os **extrínsecos**.
+No código antigo, `readMatCamTxt` e os métodos `paramExtrinseco`/`paramIntrinseco` tinham os nomes trocados (o arquivo contém os **intrínsecos**). No projeto unificado os nomes foram corrigidos.
 
 ### Extrínsecos: `solvePnP`
 
 <p align="center"><img src="docs/img/coordenadas-real-coordenadas-pixels.png" width="65%" alt="Sistema de coordenadas do mundo, da câmera e do plano da imagem, com a equação de projeção"></p>
 
-Para cada foto, `solvePnP(objectPoints, imagePoints, K, distCoeffs)` recebe:
+Para cada foto, `solvePnP(objectPoints, imagePoints, K, distCoeffs)` (em [`PoseEstimator`](src/main/java/scan3d/PoseEstimator.java)) recebe:
 
 - `objectPoints`: os 4 centros do marcador no mundo, em mm, com `Z = 0` (tabela acima);
 - `imagePoints`: os 4 centros detectados, em pixels;
@@ -159,11 +163,11 @@ Devolve `rvec` (rotação, vetor de Rodrigues) e `tvec` (translação, mm): o **
   <img src="docs/img/triangulacao-3d.png" width="48%" alt="Câmera pinhole e ponto 3D">
   <img src="docs/img/detectacao-objeto-retangular.png" width="48%" alt="Estimativa de pose e reprojeção de um modelo sobre uma caixa">
 </p>
-<p align="center"><em>Direita: exemplo de terceiros de pose estimada e reprojeção (arquivo <code>detectacao-objeto-retangular.png</code>). É o que o <code>project3d</code> do Example01 pretende fazer, desenhando um cubo sobre a folha.</em></p>
+<p align="center"><em>Direita: exemplo de terceiros de pose estimada e reprojeção (arquivo <code>detectacao-objeto-retangular.png</code>). O projeto unificado faz algo parecido em <code>output/annotated</code>, desenhando a moldura do modelo e os eixos sobre a folha.</em></p>
 
 ### Ângulos
 
-`PointsObjectInFrame.calcAngle` extrai ângulos de Euler (Tait-Bryan) de `R`, com `theta` a partir do *roll* e `phi` a partir do *pitch*, para usá-los como coordenadas esféricas.
+`PoseEstimator` extrai ângulos de Euler (convenção Z-Y-X) de `R`; `PointCloudBuilder` usa `θ = rz` (o *roll*) e `φ = |ry|` (o *pitch*) como coordenadas esféricas.
 
 <p align="center">
   <img src="docs/img/matriz-rotacao.png" width="40%" alt="Matriz de rotação">
@@ -174,7 +178,7 @@ Devolve `rvec` (rotação, vetor de Rodrigues) e `tvec` (translação, mm): o **
 
 <p align="center"><img src="docs/img/coordenadas-esferica.png" width="40%" alt="Coordenadas esféricas: r, θ, φ"></p>
 
-No `PointsObjectInFrame`, cada pixel claro do contorno `(k, j)` faz:
+No [`PointCloudBuilder`](src/main/java/scan3d/PointCloudBuilder.java), cada pixel claro do contorno `(k, j)` faz:
 
 1. `M = inv(K · [r1 r2 t])`, em que `r1, r2` são as duas primeiras colunas de `R` (a terceira, correspondente a `Z`, desaparece porque `Z = 0` no plano da folha);
 2. `[a, b, c]ᵀ = M · [k, j, 1]ᵀ`, e então `a/c` e `b/c` são as coordenadas `(X, Y)` **sobre o plano da folha**;
@@ -186,7 +190,7 @@ y = r · cos θ · sin φ
 z = r · cos φ
 ```
 
-O resultado é impresso como matriz `N × 3`. Duas observações sobre a matemática:
+O resultado, por quadro, vai para `cloud.ply` (com o índice do quadro). A fórmula foi mantida como no original, com duas correções: os ângulos eram passados em **graus** para `Math.sin/cos` (que esperam radianos) e `θ` negativo era ajustado com `360 - θ` em vez de `360 + θ`. Duas observações sobre a matemática:
 
 - O passo 2 é uma **homografia plano→imagem**, correta só para pontos que estão *no plano da folha*. Um ponto do contorno do objeto está acima da folha, então uma única vista o projeta no ponto errado; a triangulação entre vários quadros (a intenção original do projeto) é que resolveria isso.
 - `rho = a/c` (o `X` no plano) é calculado e **descartado**: só `Y` entra na conversão esférica.
@@ -199,93 +203,136 @@ Esta figura e a abaixo mostram o **resultado esperado**, retirado de material de
 
 ## O que funciona e o que não funciona
 
+Resultado de `./scan3d.sh scan --approx-camera` sobre as 129 fotos de `in/`:
+
 | Etapa | Estado |
 | --- | --- |
-| Detecção dos 2 quadrados + 2 triângulos | ✅ funciona nas amostras (Example01 exige exatamente 2+2; Example02 é mais tolerante) |
-| Centros e IDs desenhados na imagem | ✅ `storesCentroid` |
-| Calibração da câmera | ⚠️ feita uma vez em outra resolução; código só em `CalibChessBoard.java~` |
-| Pose com `solvePnP` | ⚠️ calculada, mas no Example02 `rvec`/`tvec` ficam em variáveis locais e são descartados |
-| Contorno do objeto (`maskImage`) | ⚠️ implementado, **chamada comentada** no fluxo principal dos dois exemplos |
-| Pixel → 3D (`PointsObjectInFrame`) | ⚠️ implementado, mas nada o alimenta (`paramIntrinseco`/`paramExtrinseco` comentados) |
-| Gravar nuvem em arquivo | ❌ só `System.out.println` |
-| Acumular quadros / 360° | ❌ não implementado |
-| Visualização 3D | ❌ JOGL só desenha um teste; não recebe a nuvem, e os jars JOGL não estão no repositório |
+| Detecção dos 2 quadrados + 2 triângulos | ✅ **72 de 129** quadros (56%) |
+| Identificação e ordem dos marcadores | ✅ consistente nos dois lados da volta (testado com 24 rotações sintéticas e conferido visualmente) |
+| Pose com `solvePnP` | ✅ erro de reprojeção mediano 1,2 px (com `K` aproximada); ⚠️ 26 px com o `TextMatrix.txt` original |
+| Contorno do objeto | ⚠️ localizado no objeto nos 72 quadros, mas **fragmentado** (a imagem de bordas quebra o contorno do pote) |
+| Nuvem de pontos | ⚠️ gerada e gravada (`cloud.ply`, ~12,8 mil pontos), mas **não confiável**: `z` varia de −791 a +376 mm para um pote de cerca de 10 cm, porque a projeção usa um único plano e o contorno é fragmentado |
+| Volta de 360° | ✅ o ângulo `rz` da pose cobre −179° a +180° |
+| Visualização 3D | ❌ ainda não; será acrescentada depois com uma biblioteca Java moderna |
 
-Problemas de código conhecidos, todos verificados na leitura:
+Os 57 quadros descartados (44%) têm sempre 3 marcadores ou menos, e o que falta quase sempre é o **triângulo do lado de trás**: escondido pelo próprio objeto, pequeno e borrado demais, ou cortado pela borda da foto. É um limite da configuração (o objeto oculta parte do marcador), não só do detector. Com 3 marcadores não dá para saber qual falta, então o quadro é ignorado.
 
-| Onde | Problema |
+Limitações e pontos de atenção:
+
+- **`K` de 2018 não combina com as fotos** (calibrada para ~351 × 287, fotos de 800 × 480). Use `--approx-camera` nas fotos de exemplo e recalibre para os testes práticos.
+- **Distorção da lente ignorada** (`distCoeffs` = 0). O `calibrate` imprime os coeficientes, mas o pipeline ainda não os usa.
+- **A conversão pixel → 3D é uma homografia do plano da folha.** Pontos do objeto acima da folha caem no lugar errado com uma única vista. A solução de fato é cruzar silhuetas de vários quadros (*visual hull*) ou triangular.
+- **Só a coordenada `Y` do plano entra na fórmula esférica** (`X` é calculado e descartado, como no original). Confirme se essa era a intenção.
+- **Sem GUI nem visualizador.** A saída é `cloud.ply`, que abre em MeshLab ou CloudCompare.
+
+## Do legado ao projeto unificado
+
+Os antigos `Example01` e `Example02` viraram um projeto único, com o **Example02 como base** por ser o mais próximo do objetivo (pose + contorno + nuvem de pontos). Do Example01 vieram a validação rígida de 2+2 marcadores e a ideia de desenhar a pose sobre a foto (`project3d`). O histórico dos dois continua no git.
+
+| Legado | Unificado |
 | --- | --- |
-| Ex.02 `MainActivity.processImages` | `listSquares.size() >= 0 && listTriangles.size() >= 0` é sempre verdadeiro; `calcSolvepnp` acessa `.get(1)` e lança exceção com menos de 2+2 formas |
-| Ex.02 `calcSolvepnp` | A ordem dos pontos assume `tri0, sq0, tri1, sq1`, mas a ordem real vem da enumeração de contornos do OpenCV, sem garantia |
-| Ex.01 `project3d` | `new Point(centerSquare.get(0).center.x, centerSquare.get(1).center.y)`: mistura `x` do quadrado 0 com `y` do quadrado 1 |
-| Ex.01 × Ex.02 | Modelos 3D diferentes: 161 × 187 mm (Ex.01) e 187 × 161 mm (Ex.02), com outra ordem de pontos. Pelo gabarito, 187 mm é a distância horizontal |
-| `PointsObjectInFrame.pointCloudConstruction` | Conta pixels com limiar `> 150` mas preenche com `> 200`: sobram linhas `(0,0,0)` no final da matriz |
-| `PointsObjectInFrame.calcAngle` | `if (theta1 < 0) theta1 = 360 - theta1;` dá 390° para −30°; o correto seria `360 + theta1` |
-| `readMatCamTxt` | Só lê a **última** linha do arquivo |
-| `.classpath` | Caminhos absolutos de `/home/jose/...` (incluindo `OpenGl_test/lib`, que não está mais aqui) |
+| `MainActivity` (caminho fixo `/home/jose/...`) | [`Main`](src/main/java/scan3d/Main.java) com `--in`, `--out`, `--camera`, `--approx-camera`, `--limit` |
+| `imgproc1` + `findObjects` + `storesCentroid` | [`MarkerDetector`](src/main/java/scan3d/MarkerDetector.java) |
+| `calcSolvepnp` (rvec/tvec descartados) | [`PoseEstimator`](src/main/java/scan3d/PoseEstimator.java) → `Pose`, gravada em `poses.csv` |
+| `maskImage` (comentada) | [`ObjectContour`](src/main/java/scan3d/ObjectContour.java) |
+| `PointsObjectInFrame` (Jama, `println`) | [`PointCloudBuilder`](src/main/java/scan3d/PointCloudBuilder.java) (OpenCV, sem Jama) + [`PlyWriter`](src/main/java/scan3d/PlyWriter.java) |
+| `CalibChessBoard.java~` (backup, sem uso) | [`Calibrator`](src/main/java/scan3d/Calibrator.java), comando `calibrate` |
+| `Highgui`, `Core.circle/line/putText` (OpenCV 2.4) | `Imgcodecs`, `Imgproc.*` (OpenCV 4.9) |
+| Classes JOGL (`MainCvinGL`, `OpenCVImageInGL`, `OpenCVGLTexture`) | **Removidas.** A visualização será refeita depois com outra biblioteca |
 
-## Example01 × Example02
+Correções feitas no caminho, além de fazer o fluxo funcionar de ponta a ponta:
 
-| | [`Example01`](projects/OpenCv-Java-Example01) | [`Example02`](projects/OpenCv-Java-Example02) |
-| --- | --- | --- |
-| Limiarização | `ADAPTIVE_THRESH_GAUSSIAN_C`, bloco 11 | `ADAPTIVE_THRESH_MEAN_C`, bloco 15, depois `Canny` |
-| Formas aceitas | triângulo = 3 vértices, quadrado = 4; áreas e razões mais estritas | 3 a 8 vértices; classifica por área em relação ao `minAreaRect` |
-| Validação | só segue com **exatamente** 2 quadrados e 2 triângulos | sem validação efetiva (ver acima) |
-| Saída ativa | grava foto anotada em `out/` (`*.G(11, 5)-D(2, 2).jpg`) | nenhuma (todos os `imwrite` comentados) |
-| Pose | `project3d` (desenha cubo com `projectPoints`), **comentado** | `calcSolvepnp`, ativo mas sem destino |
-| Nuvem de pontos | não tem | `PointsObjectInFrame` (Jama), desconectado |
-| Extras | | 3 classes JOGL (`MainCvinGL`, `OpenCVImageInGL`, `OpenCVGLTexture`) |
+| Problema no legado | O que mudou |
+| --- | --- |
+| `listSquares.size() >= 0` sempre verdadeiro; `.get(1)` quebrava | exige exatamente 2 triângulos e 2 quadrados; senão descarta o quadro e informa o motivo |
+| Ordem dos marcadores dependia da enumeração de contornos | ordenação por orientação (produto vetorial), válida em qualquer rotação da folha |
+| Ex.01 e Ex.02 com modelos 161×187 e 187×161 mm | um só modelo, 187 (X) × 161 (Y); confere com o gabarito |
+| `project3d` misturava `x` do quadrado 0 com `y` do quadrado 1 | não foi portado; a sobreposição usa os pontos corretos |
+| Centro de cada forma por `minEnclosingCircle`, que num triângulo retângulo cai no meio da hipotenusa | centroide por momentos. No gabarito dá ≈185 mm de espaçamento horizontal (a hipotenusa daria ≈178 mm) contra os 187 mm do modelo |
+| Triângulos finos em perspectiva eram rejeitados (razão de áreas) e fundo/código de barras eram aceitos | 3 vértices = triângulo, 4 = quadrado, fechamento morfológico das bordas e teste "escuro por dentro, claro ao redor" |
+| "Maior contorno" podia ser um marcador | regra do centro da folha (veja [Pipeline](#pipeline)) |
+| Ângulos em graus passados a `Math.sin/cos`; `360 - θ` para θ < 0 | radianos; `360 + θ` |
+| Contagem de pixels com `> 150`, preenchimento com `> 200` | um só limiar (200), sem linhas zeradas |
+| `readMatCamTxt` lia só a última linha; exigia exatamente 9 valores | lê a última linha não vazia; aceita 9 ou 11 valores |
 
 ## Estrutura do repositório
 
 | Caminho | Conteúdo |
 | --- | --- |
-| [`projects/OpenCv-Java-Example01`](projects/OpenCv-Java-Example01) | Primeiro pipeline: detecção dos marcadores e projeção de um cubo |
-| [`projects/OpenCv-Java-Example02`](projects/OpenCv-Java-Example02) | Versão mais avançada: pose, contorno, protótipo de nuvem de pontos, JOGL |
+| [`pom.xml`](pom.xml) | Projeto Maven: Java 21, `org.openpnp:opencv` 4.9 (traz as bibliotecas nativas), JUnit 5 |
+| [`src/main/java/scan3d`](src/main/java/scan3d) | Código: detector, pose, contorno, nuvem, PLY, calibração, CLI |
+| [`src/test/java/scan3d`](src/test/java/scan3d) | Testes automatizados |
+| [`scan3d.sh`](scan3d.sh) | Compila se preciso e executa (escolhe o JDK 21 do Homebrew) |
 | [`in/800x480 com objeto`](in/800x480%20com%20objeto) | 129 fotos de teste (JPG 800×480) de um pote sobre a folha |
-| [`out/`](out) | 10 saídas de teste (`*.matMask.jpg`, contornos do objeto) |
+| [`out/`](out) | 10 saídas históricas de 2018 (`*.matMask.jpg`). **Não é** a saída do programa atual |
+| `output/` | Saída do programa atual (ignorada pelo git) |
 | [`docs/img`](docs/img) | Figuras usadas neste README |
-| [`lib/`](lib) | `opencv-2413.jar` e `libopencv_java2413.so` (Linux) |
-| [`TextMatrix.txt`](TextMatrix.txt) | Matriz intrínseca (9 valores em uma linha) |
+| [`TextMatrix.txt`](TextMatrix.txt) | Matriz intrínseca original (9 valores, calibrada em outra resolução) |
+| [`lib/`](lib) | Legado: `opencv-2413.jar` e `.so` de Linux do OpenCV 2.4. **Não é mais usado** |
 | [`install-linux.md`](install-linux.md) | Passo a passo histórico (Ubuntu 16.04, Eclipse Luna, OpenCV 2.4) |
-| [`.claude/skills`](.claude/skills) | Skills para o Claude Code (ver abaixo) |
-
-Vários arquivos `*.java~` (backups do editor) e `bin/` com `.class` compilados foram mantidos como estavam. `CalibChessBoard.java~` é o único vestígio do código de calibração.
+| [`.claude/skills`](.claude/skills) | Skills para o Claude Code |
 
 ## Como executar
 
-Não há `pom.xml`, `build.gradle` nem testes: o projeto foi feito para Eclipse. Detalhes históricos de instalação em [install-linux.md](install-linux.md).
+### Instalação no macOS (feita e testada neste Mac, Apple Silicon)
 
-1. Use **Linux x86-64** com Java 8+ (o `.so` de `lib/` é ELF de Linux, não roda em macOS/Windows/Android).
-2. Importe um dos projetos no Eclipse. Coloque `lib/opencv-2413.jar` (e `Jama-1.0.3.jar`, no Example02) no *Build Path* e aponte a *Native library location* para a pasta `lib/` (ou copie o `.so` para o `java.library.path`).
-3. Em `test0()` de `MainActivity`, troque `"/home/jose/Documentos/Opencv"` por uma pasta que contenha as fotos `.jpg` **e** o `TextMatrix.txt`. A subpasta `out/` é criada dentro dela.
-4. Execute `mainOpenCv.MainActivity` e confira no console o total de quadrados e triângulos.
+```bash
+brew install openjdk@21 maven
+```
 
-Para compilar no Example02 é preciso também os jars JOGL/gluegen (`MainCvinGL` e as classes GL); eles saíram do repositório junto com o projeto `OpenGl_test`. Sem eles, exclua essas três classes do build.
+O OpenCV **não precisa ser instalado**: o pacote Maven `org.openpnp:opencv` traz a biblioteca nativa (inclusive para macOS ARM64) e o programa a extrai sozinho. O JDK 21 do Homebrew é *keg-only*, então o `scan3d.sh` já o localiza; para usá-lo no terminal:
 
-**Modernizar/portar** (OpenCV 3/4, macOS ou Android) exige pouco código, mas é uma troca de API:
+```bash
+echo 'export JAVA_HOME=/opt/homebrew/opt/openjdk@21' >> ~/.zshrc
+```
 
-| OpenCV 2.4 | OpenCV 3/4 |
+Nada foi alterado no `~/.zshrc` automaticamente.
+
+### Executar
+
+```bash
+./scan3d.sh scan --approx-camera          # fotos de exemplo, K aproximada; saída em output/
+./scan3d.sh scan --in MINHA_PASTA --camera MINHA_CAMERA.txt --out output/teste1
+./scan3d.sh calibrate --in FOTOS_TABULEIRO --pattern 8x6 --square 50   # grava TextMatrix.txt
+./scan3d.sh --help
+```
+
+O primeiro `scan3d.sh` compila (baixa dependências e gera um jar de ~110 MB, pois embute as bibliotecas nativas de todos os sistemas). Saída de `scan`:
+
+| Arquivo | Conteúdo |
 | --- | --- |
-| `Highgui.imread`, `Highgui.imwrite` | `Imgcodecs.imread`, `Imgcodecs.imwrite` |
-| `Highgui.CV_LOAD_IMAGE_COLOR` | `Imgcodecs.IMREAD_COLOR` |
-| `Core.circle`, `Core.line`, `Core.putText` | `Imgproc.circle`, `Imgproc.line`, `Imgproc.putText` |
-| `Core.FONT_HERSHEY_SIMPLEX` | `Imgproc.FONT_HERSHEY_SIMPLEX` |
-| `System.loadLibrary(Core.NATIVE_LIBRARY_NAME)` | igual, mas com a `.so`/`.dylib` da versão nova |
+| `output/annotated/*.jpg` | foto com marcadores, IDs, moldura do modelo e eixos da pose |
+| `output/contours/*.png` | contorno do objeto |
+| `output/poses.csv` | por quadro: `tx, ty, tz` (mm), `rx, ry, rz` (graus), erro de reprojeção (px), nº de pontos |
+| `output/cloud.ply` | nuvem acumulada, com a propriedade `frame` |
 
-> Nenhum destes passos foi executado durante a reescrita deste documento; as afirmações vêm da leitura do código e das imagens.
+O erro de reprojeção (`reproj_rms_px`) é o melhor indicador rápido: valores de poucos pixels indicam marcadores certos e `K` coerente; dezenas de pixels indicam `K` errada.
+
+### Para os testes práticos
+
+1. Fotografe um **tabuleiro de xadrez** impresso (ex.: 8×6 cantos internos, quadrados de 50 mm) em 15 ou mais posições, **na mesma resolução** que usará para o objeto, e rode `calibrate`.
+2. Imprima o gabarito ([`docs/img/imagem-base-referencia-coordenada.png`](docs/img/imagem-base-referencia-coordenada.png)) em A4 **sem escala/ajuste de página** e confira com régua os 187 × 161 mm entre os centros dos marcadores; se diferir, altere `WIDTH_MM`/`HEIGHT_MM` em [`PoseEstimator`](src/main/java/scan3d/PoseEstimator.java).
+3. Deixe **os quatro marcadores visíveis** em cada foto e o objeto no centro, sem cobrir nenhum marcador.
+4. Use luz difusa: sombras e reflexos quebram os contornos.
+
+### Testes
+
+```bash
+JAVA_HOME=/opt/homebrew/opt/openjdk@21 mvn test
+```
+
+Cobrem: ordenação dos marcadores em 24 rotações, recuperação de uma pose sintética conhecida (erro < 0,01 px), detecção em uma foto real de `in/`, e leitura/escala do arquivo da câmera. O comando `calibrate` **não foi exercitado com fotos reais** (não há fotos de tabuleiro no repositório); só o tratamento de erro sem imagens foi conferido.
 
 ## Próximos passos
 
 Em ordem de retorno sobre esforço:
 
-1. **Recalibrar** na resolução das fotos (ou reescalar `K`) e usar os `distCoeffs` reais.
-2. **Validar 4 marcadores** e ordená-los de forma determinística (por exemplo, triângulos à esquerda, ordenados por `y`) antes de chamar `solvePnP`; receber pasta de entrada/saída por argumento.
-3. **Persistir** `rvec`, `tvec`, ângulo do quadro e os pontos (`x,y,z,frame`) em CSV/PLY/XYZ.
-4. **Preencher a silhueta** (`drawContours` com `-1` de espessura) e remover fragmentos soltos.
-5. **Acumular os quadros** de 360° e **triangular/intersectar silhuetas** em vez de usar a homografia de plano único; o *visual hull* é o caminho natural.
-6. Visualizar o PLY/XYZ em uma ferramenta pronta (MeshLab, CloudCompare) e só depois pensar em um visualizador próprio (Three.js, JavaFX 3D ou Open3D em Python).
-7. Migrar para OpenCV Android (ou pipeline offline em Python/OpenCV) quando a lógica estiver validada.
+1. **Recalibrar** na resolução real e passar os `distCoeffs` ao `solvePnP` e à inversão.
+2. **Segmentar o objeto contra o papel branco** (limiar/GrabCut dentro do quadrilátero dos marcadores) para obter uma silhueta **preenchida**, no lugar do contorno de bordas fragmentado.
+3. **Cruzar silhuetas de vários quadros** (*visual hull*) em vez da homografia de plano único; é o que dá a terceira dimensão de verdade.
+4. **Tolerar 3 marcadores** ou reposicionar a folha/câmera para reduzir a oclusão pelo objeto (hoje 44% dos quadros são descartados).
+5. **Visualizador de nuvem** em Java com uma biblioteca moderna e simples; a entrada já está pronta em `cloud.ply`.
+6. Portar para Android (OpenCV Android + a mesma lógica), depois de validar a matemática.
 
 ## Skills para o Claude Code
 
@@ -295,4 +342,4 @@ Em [`.claude/skills`](.claude/skills) há skills que carregam este contexto sob 
 | --- | --- |
 | `scan3d-opencv-java` | Visão geral, mapa do código e roteiro de investigação |
 | `scan3d-pose-geometry` | Explicar `K`, `[R\|t]`, `solvePnP`, homografia e coordenadas esféricas, e checar a matemática do código |
-| `scan3d-legacy-run-port` | Rodar o projeto antigo, ou portá-lo para OpenCV 4/Android |
+| `scan3d-legacy-run-port` | Rodar, depurar e evoluir o projeto no macOS; histórico do legado e portabilidade |

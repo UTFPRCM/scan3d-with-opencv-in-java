@@ -1,53 +1,44 @@
 ---
 name: scan3d-legacy-run-port
-description: Como executar o protótipo scan3d legado (Eclipse, OpenCV 2.4, Linux) e como portá-lo para OpenCV 3/4, macOS ou Android. Use quando o pedido for compilar, rodar, corrigir classpath/biblioteca nativa, ou migrar a API.
+description: Como compilar, executar, testar e depurar o projeto scan3d no macOS (Apple Silicon) com Maven, JDK 21 e OpenCV 4.9 via org.openpnp; também o histórico do legado (Eclipse, OpenCV 2.4, Linux) e portabilidade (Linux, Windows, Android). Use quando o pedido for build, execução, testes práticos, calibração ou erro de biblioteca nativa.
 ---
 
-# Rodar e portar o scan3d
+# Executar e evoluir o scan3d
 
-## Estado do build
-
-- Sem `pom.xml`, `build.gradle` ou testes. Projetos Eclipse (`.project`, `.classpath`).
-- `.classpath` com caminhos absolutos de `/home/jose/workspace/...`; ajuste ou recrie o Build Path.
-- `lib/opencv-2413.jar` + `lib/libopencv_java2413.so` (ELF Linux x86-64). O `.so` **não carrega** em macOS, Windows nem Android.
-- Example02 usa `projects/OpenCv-Java-Example02/lib/Jama-1.0.3.jar`. As classes JOGL (`MainCvinGL`, `OpenCVImageInGL`, `OpenCVGLTexture`) precisam de `jogl-all`/`gluegen-rt`, que **não estão** no repositório; sem eles, exclua essas classes do build.
-- `*.java~` são backups do editor e não fazem parte do build.
-
-## Executar (Linux, ambiente histórico)
-
-1. Java 8+.
-2. Build Path: `lib/opencv-2413.jar` (+ Jama no Example02).
-3. Native library location: `lib/` (ou `-Djava.library.path=<lib>`).
-4. `MainActivity.test0()`: trocar o caminho fixo por uma pasta com fotos `.jpg` e `TextMatrix.txt`.
-5. Rodar `mainOpenCv.MainActivity`; a saída é o total de quadrados/triângulos e, no Example01, fotos em `<pasta>/out/`.
-
-Linha de comando equivalente (sem Eclipse), a partir da raiz, para o Example01:
+## Ambiente (macOS arm64)
 
 ```bash
-javac -cp lib/opencv-2413.jar -d /tmp/ex01 projects/OpenCv-Java-Example01/src/mainOpenCv/*.java
-java -Djava.library.path=lib -cp /tmp/ex01:lib/opencv-2413.jar mainOpenCv.MainActivity
+brew install openjdk@21 maven      # o OpenCV NÃO é instalado: vem em org.openpnp:opencv
+./scan3d.sh scan --approx-camera   # compila se preciso e executa
+JAVA_HOME=/opt/homebrew/opt/openjdk@21 mvn test
 ```
 
-(Não testado em Linux; edite o caminho em `test0()` antes.)
+- O JDK 21 do Homebrew é *keg-only*: `scan3d.sh` define `JAVA_HOME` sozinho se ele não estiver definido. O `mvn` do Homebrew traz também um `openjdk` mais novo; use o 21 (JDKs recentes emitem avisos ao carregar bibliotecas nativas via JNI).
+- Carga do OpenCV: `nu.pattern.OpenCV.loadLocally()` (extrai a `.dylib` do jar para uma pasta temporária). Não use `System.loadLibrary` nem `-Djava.library.path`.
+- O jar final (`target/scan3d.jar`) tem ~110 MB porque embute as nativas de todos os sistemas. `target/` e `output/` estão no `.gitignore`.
+- Linux e Windows usam o mesmo `pom.xml` (o pacote traz as nativas), mas só o macOS arm64 foi testado.
 
-## Portar para OpenCV 3/4
+## Comandos
 
-| 2.4 | 3/4 |
+- `scan [--in DIR] [--out DIR] [--camera ARQ] [--approx-camera] [--limit N]`
+- `calibrate --in DIR [--pattern 8x6] [--square 50] [--out ARQ]` (não testado com fotos reais)
+
+## Erros comuns
+
+| Sintoma | Causa provável |
 | --- | --- |
-| `org.opencv.highgui.Highgui` | `org.opencv.imgcodecs.Imgcodecs` |
-| `Highgui.imread/imwrite` | `Imgcodecs.imread/imwrite` |
-| `Highgui.CV_LOAD_IMAGE_COLOR` | `Imgcodecs.IMREAD_COLOR` |
-| `Core.circle/line/putText` | `Imgproc.circle/line/putText` |
-| `Core.FONT_HERSHEY_SIMPLEX` | `Imgproc.FONT_HERSHEY_SIMPLEX` |
+| `Unable to locate a Java Runtime` | JDK não instalado ou `JAVA_HOME` errado; `brew install openjdk@21` |
+| `UnsatisfiedLinkError` | carregou OpenCV fora de `nu.pattern.OpenCV.loadLocally()`, ou versão do JAR e da nativa diferem |
+| `AVISO: K parece calibrada para ...` | K não combina com a resolução das fotos; recalibrar ou `--approx-camera` |
+| `N de 129 quadros usados` baixo | marcadores fora do quadro/cobertos pelo objeto; veja a lista de descartes |
+| `reproj_rms_px` alto | K errada, marcadores trocados ou medidas do modelo (`WIDTH_MM`, `HEIGHT_MM`) diferentes da folha impressa |
+| Testes falham em `detectsMarkersInSamplePhoto` | foto de exemplo movida/removida ou limiares alterados |
 
-`Calib3d.solvePnP`, `Rodrigues`, `projectPoints`, `findContours`, `approxPolyDP`, `minEnclosingCircle` e `minAreaRect` mantêm o uso.  Confira as assinaturas na versão escolhida ao compilar.
+## Portar
 
-## Portar para macOS ou Android
+- Android: módulo OpenCV Android (Gradle), `OpenCVLoader.initLocal()`, `Utils.bitmapToMat`. A lógica de `MarkerDetector`, `PoseEstimator`, `ObjectContour` e `PointCloudBuilder` usa só classes `org.opencv.*` e Java puro, então pode ser reaproveitada; `Pipeline`/`Main` (arquivos e CLI) não.
+- O legado usava OpenCV 2.4 (`Highgui`, `Core.circle`). Equivalências: `Imgcodecs.imread/imwrite`, `Imgcodecs.IMREAD_COLOR`, `Imgproc.circle/line/putText`, `Imgproc.FONT_HERSHEY_SIMPLEX`. O `lib/` da raiz (jar 2.4 + `.so` Linux) é resquício e não é usado.
 
-- macOS: obter OpenCV Java (`opencv-XYZ.jar` + `libopencv_javaXYZ.dylib`) da versão escolhida, via build do OpenCV com `BUILD_JAVA=ON` ou pacote do gerenciador (por exemplo, Homebrew). Referenciar com `-Djava.library.path`.
-- Android: usar o módulo OpenCV Android (Gradle) e `OpenCVLoader.initLocal()`; converter `Bitmap`↔`Mat` com `Utils`. Trocar o loop de arquivos por callbacks de câmera e mover `TextMatrix.txt` para `assets/`.
-- Alternativa pragmática: manter o processamento offline em Python/OpenCV para validar a matemática e portar depois.
+## Antes de testes práticos
 
-## Antes de qualquer porte
-
-Corrija os problemas de lógica listados no `README.md` (validação dos 4 marcadores, ordem, `K` na resolução correta): portar código com esses erros só muda o lugar onde eles falham.
+Recalibrar na resolução das fotos; conferir com régua os 187 × 161 mm entre centros dos marcadores impressos; manter os 4 marcadores visíveis; luz difusa. Detalhes em `README.md` ("Para os testes práticos").
