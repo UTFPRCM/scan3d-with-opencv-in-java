@@ -1,6 +1,6 @@
 # Reconstrução 3D com OpenCV e Java
 
-Protótipo (2018) para **reconstruir objetos em 3D a partir de fotos tiradas ao redor deles**, usando apenas uma câmera comum e uma folha A4 impressa com um marcador de referência. A primeira versão foi feita em Java no Eclipse (Linux) com OpenCV 2.4, pensando em rodar depois em Android. Hoje o repositório é **um único projeto Maven** (Java 21, OpenCV 4.9) que roda no macOS, incluindo Apple Silicon.
+Protótipo para **reconstruir objetos em 3D a partir de fotos tiradas ao redor deles**, usando apenas uma câmera comum e uma folha A4 impressa com um marcador de referência. A primeira versão foi feita em Java no Eclipse (Linux) com OpenCV 2.4, pensando em rodar depois em Android. Hoje o repositório é **um único projeto Maven** (Java 21, OpenCV 4.9) que roda no macOS, incluindo Apple Silicon.
 
 <p align="center">
   <img src="docs/img/resultado-pose-frente.jpg" width="48%" alt="Saída: marcadores, IDs, moldura do modelo e eixos da pose (vista frontal)">
@@ -21,7 +21,7 @@ Protótipo (2018) para **reconstruir objetos em 3D a partir de fotos tiradas ao 
 7. [Interface gráfica](#interface-gráfica)
 8. [O que funciona e o que não funciona](#o-que-funciona-e-o-que-não-funciona)
 9. [Do legado ao projeto unificado](#do-legado-ao-projeto-unificado)
-10. [Sobre o `out/` de 2018](#sobre-o-out-de-2018)
+10. [Sobre o `out/`](#sobre-o-out)
 11. [Estrutura do repositório](#estrutura-do-repositório)
 12. [Como executar](#como-executar)
 13. [Próximos passos](#próximos-passos)
@@ -97,7 +97,7 @@ flowchart LR
 
 **Detecção do marcador.** A ordem `tri0, sq0, tri1, sq1` não vem mais da enumeração dos contornos. Em uma volta de 360° o marcador aparece em qualquer rotação (na metade da volta os quadrados ficam à esquerda), então o código usa a orientação: como a câmera vê a folha de cima, o produto vetorial entre o eixo triângulo→quadrado e o eixo entre as duas formas iguais tem sinal fixo, o que identifica qual é a "0" e qual é a "1". Quadros com 4 marcadores dão a pose de melhor qualidade. Com 3, a pose é recuperada por outro caminho (próxima seção); com menos, o quadro é **ignorado**, não adivinhado.
 
-**A "máscara" é um contorno, não uma região preenchida.** [`ObjectContour`](src/main/java/scan3d/ObjectContour.java) usa outra imagem de bordas que a dos marcadores: `Canny` direto do cinza (limiares 20 e 100) com dilatação 2×2, como no código que gerou o `out/` de 2018 (veja [Sobre o `out/` de 2018](#sobre-o-out-de-2018)). As bordas do Example02 (`adaptiveThreshold` antes do `Canny`) servem para achar os marcadores, mas fragmentavam o contorno do objeto. Depois, o objeto fica em pé dentro do retângulo dos marcadores, então o retângulo (encolhido 25 mm para excluir os marcadores e esticado 250 mm para cima) é reprojetado com a pose do quadro e só as bordas dentro dele valem. Isso tira o fundo, os marcadores e as linhas da borda da folha que se ligavam ao pote. Entre as bordas restantes, fica o componente de maior caixa envolvente e uma banda fina em volta dele. **Limites:** o objeto precisa caber no retângulo dos marcadores e ter até 250 mm de altura, e a **borda de trás da folha** ainda aparece em alguns quadros, atrás do objeto (cai dentro da região pela mesma linha de visada).
+**A "máscara" é um contorno, não uma região preenchida.** [`ObjectContour`](src/main/java/scan3d/ObjectContour.java) usa outra imagem de bordas que a dos marcadores: `Canny` direto do cinza (limiares 20 e 100) com dilatação 2×2, como no código que gerou o `out/` (veja [Sobre o `out/`](#sobre-o-out)). As bordas do Example02 (`adaptiveThreshold` antes do `Canny`) servem para achar os marcadores, mas fragmentavam o contorno do objeto. Depois, o objeto fica em pé dentro do retângulo dos marcadores, então o retângulo (encolhido 25 mm para excluir os marcadores e esticado 250 mm para cima) é reprojetado com a pose do quadro e só as bordas dentro dele valem. Isso tira o fundo, os marcadores e as linhas da borda da folha que se ligavam ao pote. Entre as bordas restantes, fica o componente de maior caixa envolvente e uma banda fina em volta dele. **Limites:** o objeto precisa caber no retângulo dos marcadores e ter até 250 mm de altura, e a **borda de trás da folha** ainda aparece em alguns quadros, atrás do objeto (cai dentro da região pela mesma linha de visada).
 
 <p align="center"><img src="docs/img/mascara.png" width="70%" alt="Conceito de máscara: imagem, máscara, resultado"></p>
 <p align="center"><em>Conceito de máscara (imagem genérica; a saída real é a silhueta fina em <code>output/contours</code>).</em></p>
@@ -135,7 +135,7 @@ Pela semelhança de triângulos, com `P` a largura em pixels, `W` a largura real
 
 ### Intrínsecos: `TextMatrix.txt`
 
-Os valores vêm de uma calibração com tabuleiro de xadrez feita em 2018 (tabuleiro 8×6, quadrados de 50 mm, `CALIB_FIX_PRINCIPAL_POINT`). O código original só imprimia a matriz e os números foram copiados à mão para a única linha do arquivo. Ele foi portado para o comando `calibrate` (veja [Como executar](#como-executar)), que agora grava o arquivo sozinho e, no formato de 11 valores, guarda também a resolução da calibração:
+Os valores vêm de uma calibração feita em 2017 (tabuleiro 8×6, quadrados de 50 mm, `CALIB_FIX_PRINCIPAL_POINT`). O código original só imprimia a matriz e os números foram copiados à mão para a única linha do arquivo. Ele foi portado para o comando `calibrate` (veja [Como executar](#como-executar)), que agora grava o arquivo sozinho e, no formato de 11 valores, guarda também a resolução da calibração:
 
 ```text
 fx, 0, cx, 0, fy, cy, 0, 0, 1
@@ -260,17 +260,17 @@ Resultado de `./scan3d.sh scan --approx-camera` sobre as 129 fotos de `in/`:
 | Quadros com 3 marcadores | ✅ 44 recuperados, marcados como confiança menor (validação e limites em [Quadros com 3 marcadores](#quadros-com-3-marcadores)) |
 | Quadros ignorados | 14 de 129, com motivo (115 usados; 6 quadros com 2 triângulos + 3 quadrados foram recuperados descartando a forma a mais). Restam 2 com 1 triângulo e 3 quadrados, 3 com 1 e 1, e 9 com 3 marcadores sem referência confiável |
 | Pose | ✅ erro de reprojeção mediano 1,2 px (câmera aproximada); ⚠️ 26 px com o `TextMatrix.txt` original |
-| Contorno do objeto | ✅ presente em todos os 116 quadros, contínuo na maioria (mediana de ~1,4 mil pixels); ⚠️ com a borda de trás da folha e detalhes do rótulo em alguns quadros. Reproduz 99% do `out/` de 2018 |
+| Contorno do objeto | ✅ presente em todos os 116 quadros, contínuo na maioria (mediana de ~1,4 mil pixels); ⚠️ com a borda de trás da folha e detalhes do rótulo em alguns quadros. Reproduz 99% do `out/` |
 | Nuvem de pontos | ✅ por lâminas: 37.860 pontos com a forma do pote, raio estável (dispersão de 0,6 a 1,8 mm), cobertura de 296° de 360°; ⚠️ aproximação para objetos que não são de revolução |
 | Volta de 360° | ✅ o ângulo `rz` da pose cobre −179° a +180° |
 | Interface gráfica e visualizador | ✅ processar, visualizar, navegar quadros (testado via captura de tela; o clique do usuário nos botões não foi exercitado por mim) |
 
 Limitações e pontos de atenção:
 
-- **`K` de 2018 não combina com as fotos** (calibrada para ~351 × 287, fotos de 800 × 480). Use `--approx-camera` nas fotos de exemplo e recalibre para os testes práticos.
+- **`K` não combina com as fotos** (calibrada para ~351 × 287, fotos de 800 × 480). Use `--approx-camera` nas fotos de exemplo e recalibre para os testes práticos.
 - **Distorção da lente ignorada** (`distCoeffs` = 0). O `calibrate` imprime os coeficientes, mas o pipeline ainda não os usa.
 - **A nuvem por lâminas é exata só para objetos de revolução.** Para outros formatos o ponto da borda é posto no plano do eixo, então faces planas ficam "estufadas" e partes côncavas somem. O método geral é o *visual hull*.
-- **A qualidade da nuvem depende de `K`.** Com o `TextMatrix.txt` de 2018 a pose sai imprecisa; as fotos de exemplo foram processadas com a câmera aproximada. Recalibre antes dos testes práticos.
+- **A qualidade da nuvem depende de `K`.** Com o `TextMatrix.txt` a pose sai imprecisa; as fotos de exemplo foram processadas com a câmera aproximada. Recalibre antes dos testes práticos.
 - **Falsos positivos** (uma forma a mais parecida com um marcador): com pelo menos 2 triângulos e 2 quadrados detectados, fica o par de cada tipo cuja razão (distância entre os quadrados)/(distância entre os triângulos) mais se aproxima da mediana dos quadros completos, com tolerância de 30% (a perspectiva desloca a razão). Não cobre o caso de 1 triângulo + 3 quadrados, nem quando duas combinações têm razões parecidas.
 - Falhas são esperadas: o programa ignora os quadros que não consegue processar e segue com os demais.
 
@@ -299,12 +299,12 @@ Correções feitas no caminho, além de fazer o fluxo funcionar de ponta a ponta
 | `project3d` misturava `x` do quadrado 0 com `y` do quadrado 1 | não foi portado; a sobreposição usa os pontos corretos |
 | Centro de cada forma por `minEnclosingCircle`, que num triângulo retângulo cai no meio da hipotenusa | centroide por momentos. No gabarito dá ≈185 mm de espaçamento horizontal (a hipotenusa daria ≈178 mm) contra os 187 mm do modelo |
 | Triângulos finos em perspectiva eram rejeitados (razão de áreas) e fundo/código de barras eram aceitos | 3 vértices = triângulo, 4 = quadrado, fechamento morfológico das bordas e teste "escuro por dentro, claro ao redor" |
-| "Maior contorno" podia ser um marcador, e o contorno saía fragmentado | bordas antigas (`Canny` 20/100) + recorte pelo volume do objeto reprojetado com a pose (veja [Pipeline](#pipeline) e [Sobre o `out/` de 2018](#sobre-o-out-de-2018)) |
+| "Maior contorno" podia ser um marcador, e o contorno saía fragmentado | bordas antigas (`Canny` 20/100) + recorte pelo volume do objeto reprojetado com a pose (veja [Pipeline](#pipeline) e [Sobre o `out/`](#sobre-o-out)) |
 | Ângulos em graus passados a `Math.sin/cos`; `360 - θ` para θ < 0 | (código da fórmula esférica, hoje substituído pelas lâminas; os ângulos passaram a ser calculados como azimute da câmera) |
 | Contagem de pixels com `> 150`, preenchimento com `> 200` | (idem: código substituído; o construtor atual não tem esse problema) |
 | `readMatCamTxt` lia só a última linha; exigia exatamente 9 valores | lê a última linha não vazia; aceita 9 ou 11 valores |
 
-## Sobre o `out/` de 2018
+## Sobre o `out/`
 
 O contorno de `out/` era bem mais definido que o do primeiro projeto unificado. Comparando pixel a pixel com os 10 arquivos e lendo os backups `MainActivity.java~` do histórico do git (a versão do código que gera `.matMask`), o que se sabe:
 
@@ -323,7 +323,7 @@ O contorno de `out/` era bem mais definido que o do primeiro projeto unificado. 
 | [`src/test/java/scan3d`](src/test/java/scan3d) | Testes automatizados |
 | [`scan3d.sh`](scan3d.sh) | Compila se preciso e executa (escolhe o JDK 21 do Homebrew) |
 | [`in/800x480 com objeto`](in/800x480%20com%20objeto) | 129 fotos de teste (JPG 800×480) de um pote sobre a folha |
-| [`out/`](out) | 10 saídas históricas de 2018 (`*.matMask.jpg`), os melhores quadros do início da sequência. **Não é** a saída do programa atual (veja [Sobre o `out/` de 2018](#sobre-o-out-de-2018)) |
+| [`out/`](out) | 10 saídas históricas (`*.matMask.jpg`), os melhores quadros do início da sequência. **Não é** a saída do programa atual (veja [Sobre o `out/`](#sobre-o-out)) |
 | `output/` | Saída do programa atual (ignorada pelo git): `annotated/`, `contours/`, `poses.csv`, `cloud.ply`, `skipped.txt` |
 | [`docs/img`](docs/img) | Figuras usadas neste README |
 | [`TextMatrix.txt`](TextMatrix.txt) | Matriz intrínseca original (9 valores, calibrada em outra resolução) |
@@ -383,7 +383,7 @@ O erro de reprojeção (`reproj_rms_px`) é o melhor indicador rápido: valores 
 JAVA_HOME=/opt/homebrew/opt/openjdk@21 mvn test
 ```
 
-São 11 testes: ordenação dos marcadores em 24 rotações; recuperação de uma pose sintética conhecida (erro < 0,01 px); recuperação com 3 marcadores, escondendo cada um por vez; rejeição de referência distante; contagem de marcadores parciais; detecção em uma foto real de `in/`; leitura/escala do arquivo da câmera; ida e volta do PLY; o contorno do objeto contra o `out/` de 2018 (deve reproduzir ≥ 90% dele); e um cilindro sintético (raio, altura, centro deslocado e câmera em distâncias diferentes) que a nuvem por lâminas deve devolver com o mesmo raio em todos os ângulos. A GUI foi verificada por capturas de tela, sem teste automatizado. O comando `calibrate` **não foi exercitado com fotos reais** (não há fotos de tabuleiro no repositório); só o tratamento de erro sem imagens foi conferido.
+São 11 testes: ordenação dos marcadores em 24 rotações; recuperação de uma pose sintética conhecida (erro < 0,01 px); recuperação com 3 marcadores, escondendo cada um por vez; rejeição de referência distante; contagem de marcadores parciais; detecção em uma foto real de `in/`; leitura/escala do arquivo da câmera; ida e volta do PLY; o contorno do objeto contra o `out/` (deve reproduzir ≥ 90% dele); e um cilindro sintético (raio, altura, centro deslocado e câmera em distâncias diferentes) que a nuvem por lâminas deve devolver com o mesmo raio em todos os ângulos. A GUI foi verificada por capturas de tela, sem teste automatizado. O comando `calibrate` **não foi exercitado com fotos reais** (não há fotos de tabuleiro no repositório); só o tratamento de erro sem imagens foi conferido.
 
 ## Próximos passos
 
