@@ -59,6 +59,7 @@ public final class Pipeline {
         final int index;
         final Path file;
         MarkerDetector.Detection detection;
+        List<MarkerDetector.Shape> discarded = List.of(); // formas a mais, descartadas por não combinarem com o marcador
         Pose pose;
         Point[] used;          // os 4 pontos do modelo vistos na imagem (null onde o marcador faltou)
         int refFrame = -1;
@@ -77,6 +78,8 @@ public final class Pipeline {
 
     private static final double MAX_JUMP_MM_PER_FRAME = 60;
     private static final double MAX_ROT_DEG = 30;
+    /** Desvio relativo máximo da razão (distância entre quadrados)/(entre triângulos) em relação aos outros quadros. */
+    private static final double MAX_RATIO_ERROR = 0.3;
     /** Máximo de quadros de 3 marcadores encadeados; a simulação em dados reais foi validada até 8. */
     private static final int MAX_HOPS = 8;
 
@@ -127,6 +130,25 @@ public final class Pipeline {
             frames.add(f);
         }
 
+        // Formas a mais (ex.: 2 triângulos e 3 quadrados): fica o par de cada tipo cuja distância combina com a dos
+        // quadros completos; as demais são falsos positivos e só aparecem marcadas na foto anotada.
+        if (estimator != null) {
+            double refRatio = MarkerDetector.referenceRatio(frames.stream().map(f -> f.detection).toList());
+            for (Frame f : frames) {
+                if (f.pose != null) continue;
+                MarkerDetector.Reduced r = MarkerDetector.reduce(f.detection, refRatio, MAX_RATIO_ERROR);
+                if (r == null) continue;
+                listener.log(String.format(Locale.ROOT,
+                        "%s: %s; ficaram 2 e 2 (razão entre distâncias a %.0f%% da dos outros quadros)", f.name(),
+                        counts(f), r.ratioError() * 100));
+                f.detection = r.detection();
+                f.discarded = r.discarded();
+                MarkerDetector.MarkerSet markers = detector.order(f.detection);
+                f.pose = estimator.estimate(markers);
+                f.used = markers.asArray();
+            }
+        }
+
         // ---- Fase B: quadros com 3 marcadores
         // Em camadas: a camada 1 usa quadros de 4 marcadores como referência, a 2 usa os resolvidos na 1, e assim por
         // diante. Cada pose vem de um P3P independente (a referência só desempata), então o erro não se acumula.
@@ -134,8 +156,9 @@ public final class Pipeline {
         for (Frame f : frames) {
             if (f.pose != null) continue;
             if (cfg.minMarkers() > 3 || !f.detection.partial()) {
-                skip(skipped, listener, f.name() + ": " + counts(f) + "; precisa de "
-                        + (cfg.minMarkers() > 3 ? "2 e 2" : "2 e 2, ou 2 e 1, ou 1 e 2"));
+                skip(skipped, listener, f.name() + ": " + counts(f) + "; " + (f.detection.extra()
+                        ? "nenhuma combinação de 2 e 2 é coerente com a distância entre marcadores dos outros quadros"
+                        : "precisa de " + (cfg.minMarkers() > 3 ? "2 e 2" : "2 e 2, ou 2 e 1, ou 1 e 2")));
             } else {
                 pending.add(f);
             }
@@ -165,6 +188,13 @@ public final class Pipeline {
                     + " quadros, ou pose inconsistente com ela");
         }
 
+        // quadros ignorados também ganham a foto anotada, com todas as formas detectadas, para ver o que houve
+        for (Frame f : frames) {
+            if (f.pose != null) continue;
+            Mat bgr = Imgcodecs.imread(f.file.toString(), Imgcodecs.IMREAD_COLOR);
+            Imgcodecs.imwrite(annotatedDir.resolve(baseName(f.name()) + ".jpg").toString(), annotateSkipped(bgr, f));
+        }
+
         // ---- Fase C: contorno, nuvem e saídas
         LaminaCloudBuilder cloudBuilder = estimator == null ? null : new LaminaCloudBuilder(estimator);
         List<Frame> accepted = frames.stream().filter(f -> f.pose != null).toList();
@@ -178,7 +208,7 @@ public final class Pipeline {
                 Frame f = accepted.get(n);
                 Mat bgr = Imgcodecs.imread(f.file.toString(), Imgcodecs.IMREAD_COLOR);
                 String name = f.name();
-                String base = name.substring(0, name.lastIndexOf('.'));
+                String base = baseName(name);
 
                 // o objeto fica dentro do retângulo dos marcadores: o contorno só vale nessa região, reprojetada com a pose
                 Mat mask = contour.extract(bgr, estimator.project(ObjectContour.volumeCorners(), f.pose));
@@ -257,8 +287,43 @@ public final class Pipeline {
         return camera;
     }
 
+    private static String baseName(String name) {
+        return name.substring(0, name.lastIndexOf('.'));
+    }
+
+    private static final Scalar TRIANGLE_COLOR = new Scalar(255, 0, 255); // magenta
+    private static final Scalar SQUARE_COLOR = new Scalar(0, 255, 255);   // amarelo
+    private static final Scalar DISCARDED_COLOR = new Scalar(160, 160, 160);
+
+    private static void drawShapes(Mat img, List<MarkerDetector.Shape> shapes, String prefix, Scalar color) {
+        for (int i = 0; i < shapes.size(); i++) {
+            Point c = shapes.get(i).center();
+            Imgproc.circle(img, c, (int) Math.max(8, shapes.get(i).radius() + 3), color, 2);
+            Imgproc.putText(img, prefix + (i + 1), new Point(c.x + 10, c.y - 10), Imgproc.FONT_HERSHEY_SIMPLEX, 0.5,
+                    color, 1);
+        }
+    }
+
+    /** Quadro sem pose: mostra tudo o que foi detectado (triângulos em magenta, quadrados em amarelo). */
+    private static Mat annotateSkipped(Mat bgr, Frame f) {
+        Mat img = bgr.clone();
+        drawShapes(img, f.detection.triangles(), "T", TRIANGLE_COLOR);
+        drawShapes(img, f.detection.squares(), "S", SQUARE_COLOR);
+        // putText do OpenCV só desenha ASCII
+        Imgproc.putText(img, String.format("ignorado: %d triangulo(s), %d quadrado(s)", f.detection.triangles().size(),
+                f.detection.squares().size()), new Point(10, 24), Imgproc.FONT_HERSHEY_SIMPLEX, 0.6,
+                new Scalar(0, 0, 255), 2);
+        return img;
+    }
+
     private static Mat annotate(Mat bgr, Frame f, PoseEstimator estimator) {
         Mat img = bgr.clone();
+        for (MarkerDetector.Shape d : f.discarded) {
+            Point c = d.center();
+            Imgproc.circle(img, c, (int) Math.max(8, d.radius() + 3), DISCARDED_COLOR, 2);
+            Imgproc.putText(img, "descartado", new Point(c.x - 30, c.y + d.radius() + 18),
+                    Imgproc.FONT_HERSHEY_SIMPLEX, 0.5, DISCARDED_COLOR, 1);
+        }
         boolean low = f.pose.lowConfidence();
         Scalar frameColor = low ? new Scalar(0, 165, 255) : new Scalar(0, 255, 0); // laranja = confiança menor
         String[] labels = {"T0", "S0", "T1", "S1"};

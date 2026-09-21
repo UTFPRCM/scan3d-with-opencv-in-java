@@ -143,8 +143,8 @@ fx, 0, cx, 0, fy, cy, 0, 0, 1
 fx, 0, cx, 0, fy, cy, 0, 0, 1, largura, altura                   (novo, 11 valores)
 ```
 
-<p align="center"><img src="docs/img/circles_pattern.png" width="40%" alt="Padrão de círculos assimétricos do OpenCV"></p>
-<p align="center"><em><code>circles_pattern.png</code>: padrão alternativo de calibração (grade de círculos) que consta em <code>docs/img</code>; o código usa tabuleiro de xadrez.</em></p>
+<p align="center"><img src="docs/img/A4-circles-pattern.png" width="40%" alt="Padrão de círculos assimétricos do OpenCV"></p>
+<p align="center"><em><code>A4-circles-pattern.png</code>: padrão alternativo de calibração (grade de círculos) que consta em <code>docs/img</code>; o código usa tabuleiro de xadrez.</em></p>
 
 > ⚠️ **Resolução inconsistente.** `cx = 175.5` e `cy = 143.5` correspondem ao centro de uma imagem de ~351 × 287 px, e a calibração fixou o ponto principal nesse centro. As fotos de `in/` têm **800 × 480** (proporção diferente, 1,67 contra 1,22). Medido no projeto unificado sobre os 72 quadros em que os marcadores foram detectados: com o `TextMatrix.txt` original o erro de reprojeção mediano é **26 px** (máximo 47 px); com uma câmera aproximada (`--approx-camera`: `f` = largura da imagem, ponto principal no centro) cai para **1,2 px**. Por isso o programa avisa quando `K` não combina com a resolução das fotos, e o passo mais importante antes dos testes práticos é recalibrar na resolução real da câmera.
 
@@ -235,7 +235,7 @@ A aba **Nuvem de pontos** é um visualizador próprio em JavaFX (sem OpenGL): pr
 
 <p align="center"><img src="docs/img/gui-nuvem.png" width="85%" alt="Aba Nuvem de pontos"></p>
 
-A aba **Quadros** lista todas as fotos (verde = 4 marcadores, laranja = 3, vermelho = ignorado) e mostra a foto anotada com a pose ou, nos ignorados, a foto original e o motivo.
+A aba **Quadros** lista todas as fotos (verde = 4 marcadores, laranja = 3, vermelho = ignorado) e mostra a foto anotada e o motivo. Nos quadros com pose, a anotação traz os marcadores, a moldura e os eixos (formas descartadas aparecem em cinza); nos ignorados, traz todas as formas detectadas (triângulos `T` em magenta, quadrados `S` em amarelo), para ver o que o detector enxergou.
 
 <p align="center"><img src="docs/img/gui-quadros.png" width="85%" alt="Aba Quadros"></p>
 
@@ -258,7 +258,7 @@ Resultado de `./scan3d.sh scan --approx-camera` sobre as 129 fotos de `in/`:
 | --- | --- |
 | Detecção e ordem dos marcadores | ✅ 72 quadros com 4 marcadores; ordem consistente nos dois lados da volta (24 rotações sintéticas + conferência visual) |
 | Quadros com 3 marcadores | ✅ 44 recuperados, marcados como confiança menor (validação e limites em [Quadros com 3 marcadores](#quadros-com-3-marcadores)) |
-| Quadros ignorados | 13 de 129, com motivo. Em 8 deles há uma forma a mais (falso positivo) que impede a contagem 2+2 ou 2+1; em 3 só há 1 triângulo e 1 quadrado; 2 não têm referência confiável |
+| Quadros ignorados | 14 de 129, com motivo (115 usados; 6 quadros com 2 triângulos + 3 quadrados foram recuperados descartando a forma a mais). Restam 2 com 1 triângulo e 3 quadrados, 3 com 1 e 1, e 9 com 3 marcadores sem referência confiável |
 | Pose | ✅ erro de reprojeção mediano 1,2 px (câmera aproximada); ⚠️ 26 px com o `TextMatrix.txt` original |
 | Contorno do objeto | ✅ presente em todos os 116 quadros, contínuo na maioria (mediana de ~1,4 mil pixels); ⚠️ com a borda de trás da folha e detalhes do rótulo em alguns quadros. Reproduz 99% do `out/` de 2018 |
 | Nuvem de pontos | ✅ por lâminas: 37.860 pontos com a forma do pote, raio estável (dispersão de 0,6 a 1,8 mm), cobertura de 296° de 360°; ⚠️ aproximação para objetos que não são de revolução |
@@ -271,7 +271,7 @@ Limitações e pontos de atenção:
 - **Distorção da lente ignorada** (`distCoeffs` = 0). O `calibrate` imprime os coeficientes, mas o pipeline ainda não os usa.
 - **A nuvem por lâminas é exata só para objetos de revolução.** Para outros formatos o ponto da borda é posto no plano do eixo, então faces planas ficam "estufadas" e partes côncavas somem. O método geral é o *visual hull*.
 - **A qualidade da nuvem depende de `K`.** Com o `TextMatrix.txt` de 2018 a pose sai imprecisa; as fotos de exemplo foram processadas com a câmera aproximada. Recalibre antes dos testes práticos.
-- **Falsos positivos** (uma terceira forma parecida com um marcador) fazem o quadro ser ignorado em vez de escolher a melhor combinação.
+- **Falsos positivos** (uma forma a mais parecida com um marcador): com pelo menos 2 triângulos e 2 quadrados detectados, fica o par de cada tipo cuja razão (distância entre os quadrados)/(distância entre os triângulos) mais se aproxima da mediana dos quadros completos, com tolerância de 30% (a perspectiva desloca a razão). Não cobre o caso de 1 triângulo + 3 quadrados, nem quando duas combinações têm razões parecidas.
 - Falhas são esperadas: o programa ignora os quadros que não consegue processar e segue com os demais.
 
 ## Do legado ao projeto unificado
@@ -392,7 +392,7 @@ Em ordem de retorno sobre esforço:
 1. **Recalibrar** na resolução real e passar os `distCoeffs` ao `solvePnP` e à inversão.
 2. **Visual hull** (interseção das silhuetas esticadas) para objetos que não são de revolução; a lâmina infla faces planas e perde concavidades. Precisa de silhueta preenchida (item 3).
 3. **Segmentar o objeto contra o papel branco** (limiar/GrabCut dentro da região reprojetada) para obter uma silhueta **preenchida**, necessária ao *visual hull* e sem as linhas da borda da folha que ainda escapam do contorno atual.
-4. **Escolher a melhor combinação** quando há uma forma a mais que o esperado (8 quadros perdidos hoje por falso positivo) em vez de ignorar o quadro.
+4. **Formas a mais com 1 triângulo ou 1 quadrado** (2 quadros hoje): a razão de distâncias não existe; seria preciso outro critério, como o erro de reprojeção de cada combinação.
 5. Filtrar/ponderar pontos de quadros de confiança menor na reconstrução (a GUI já permite escondê-los) e medir o efeito com fotos reais.
 6. Portar para Android (OpenCV Android + a mesma lógica), depois de validar a matemática.
 

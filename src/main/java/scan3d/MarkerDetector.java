@@ -30,10 +30,79 @@ public final class MarkerDetector {
             return triangles.size() == 2 && squares.size() == 2;
         }
 
+        /** Formas a mais do que o marcador tem (falsos positivos): pelo menos 2 de cada tipo e mais de 4 no total. */
+        public boolean extra() {
+            return triangles.size() >= 2 && squares.size() >= 2 && triangles.size() + squares.size() > 4;
+        }
+
         /** Exatamente 3 marcadores: 2 triângulos + 1 quadrado, ou 1 triângulo + 2 quadrados. */
         public boolean partial() {
             return (triangles.size() == 2 && squares.size() == 1) || (triangles.size() == 1 && squares.size() == 2);
         }
+    }
+
+    /** Detecção reduzida a 2 triângulos + 2 quadrados e as formas que ficaram de fora. */
+    public record Reduced(Detection detection, List<Shape> discarded, double ratioError) {}
+
+    /** Máximo de formas de cada tipo aceito na busca da melhor combinação (evita explosão combinatória). */
+    static final int MAX_CANDIDATES = 4;
+
+    /**
+     * Razão entre a distância dos 2 quadrados e a dos 2 triângulos. Não depende da escala da foto, então serve para
+     * comparar quadros tirados a distâncias diferentes.
+     */
+    static double pairRatio(Shape t0, Shape t1, Shape s0, Shape s1) {
+        return dist(s0.center(), s1.center()) / dist(t0.center(), t1.center());
+    }
+
+    /** Mediana de {@link #pairRatio} nas detecções completas (2 e 2); NaN se não houver nenhuma. */
+    public static double referenceRatio(List<Detection> detections) {
+        double[] r = detections.stream().filter(Detection::complete)
+                .mapToDouble(d -> pairRatio(d.triangles().get(0), d.triangles().get(1), d.squares().get(0),
+                        d.squares().get(1)))
+                .filter(v -> !Double.isNaN(v) && !Double.isInfinite(v)).sorted().toArray();
+        if (r.length == 0) return Double.NaN;
+        return r.length % 2 == 1 ? r[r.length / 2] : (r[r.length / 2 - 1] + r[r.length / 2]) / 2;
+    }
+
+    /**
+     * Quando há formas a mais (por exemplo 2 triângulos e 3 quadrados, sendo um deles um falso positivo), escolhe o
+     * par de triângulos e o par de quadrados cuja {@link #pairRatio razão} fica mais perto da de referência, obtida
+     * dos quadros com 2 e 2. A razão entre distâncias é a mesma em qualquer escala; a perspectiva a desloca um pouco,
+     * por isso a tolerância.
+     *
+     * @param tolerance desvio relativo máximo aceito em relação à referência (0,3 = 30%)
+     * @return a detecção reduzida, ou null se não houver forma sobrando, se faltar um par de algum tipo, se houver
+     *         candidatos demais ou se nenhuma combinação chegar perto da referência
+     */
+    public static Reduced reduce(Detection d, double refRatio, double tolerance) {
+        List<Shape> tri = d.triangles(), sq = d.squares();
+        if (Double.isNaN(refRatio) || tri.size() < 2 || sq.size() < 2 || tri.size() + sq.size() <= 4
+                || tri.size() > MAX_CANDIDATES || sq.size() > MAX_CANDIDATES) {
+            return null;
+        }
+        double bestErr = Double.MAX_VALUE;
+        int[] best = null;
+        for (int i = 0; i < tri.size(); i++) {
+            for (int j = i + 1; j < tri.size(); j++) {
+                for (int k = 0; k < sq.size(); k++) {
+                    for (int l = k + 1; l < sq.size(); l++) {
+                        double err = Math.abs(pairRatio(tri.get(i), tri.get(j), sq.get(k), sq.get(l)) / refRatio - 1);
+                        if (err < bestErr) {
+                            bestErr = err;
+                            best = new int[] {i, j, k, l};
+                        }
+                    }
+                }
+            }
+        }
+        if (best == null || bestErr > tolerance) return null;
+        List<Shape> discarded = new ArrayList<>();
+        for (int i = 0; i < tri.size(); i++) if (i != best[0] && i != best[1]) discarded.add(tri.get(i));
+        for (int k = 0; k < sq.size(); k++) if (k != best[2] && k != best[3]) discarded.add(sq.get(k));
+        Detection kept = new Detection(List.of(tri.get(best[0]), tri.get(best[1])),
+                List.of(sq.get(best[2]), sq.get(best[3])));
+        return new Reduced(kept, discarded, bestErr);
     }
 
     /** Quatro centros na ordem do modelo 3D: tri0, sq0, tri1, sq1. */

@@ -27,7 +27,7 @@ import javafx.scene.shape.Circle;
 
 /**
  * Navegador dos quadros de um processamento: lista à esquerda (verde = 4 marcadores, laranja = 3, vermelho = ignorado)
- * e, à direita, a foto anotada com a pose ou, para quadros ignorados, a foto original e o motivo.
+ * e, à direita, a foto anotada (com a pose, ou com todas as formas detectadas nos quadros ignorados) e o motivo.
  */
 public final class FramesPane extends SplitPane {
 
@@ -126,8 +126,11 @@ public final class FramesPane extends SplitPane {
                 int k = line.indexOf(": ");
                 if (k < 0) continue;
                 String file = line.substring(0, k);
+                // a foto anotada mostra tudo o que foi detectado (T = triângulo, S = quadrado); sem ela, cai na original
+                Path annotated = outDir.resolve("annotated").resolve(file.substring(0, file.lastIndexOf('.')) + ".jpg");
                 Path original = inputDir != null ? inputDir.resolve(file) : null;
-                items.add(new Item(file, Status.SKIPPED, "Ignorado: " + line.substring(k + 2), original));
+                items.add(new Item(file, Status.SKIPPED, "Ignorado: " + line.substring(k + 2),
+                        Files.exists(annotated) ? annotated : original));
             }
         }
         items.sort(Comparator.comparing(Item::file));

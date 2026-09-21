@@ -2,6 +2,7 @@ package scan3d;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -164,6 +165,37 @@ class MarkerAndPoseTest {
         assertTrue(new MarkerDetector.Detection(List.of(s, s), List.of(s)).partial());
         assertTrue(new MarkerDetector.Detection(List.of(s), List.of(s, s)).partial());
         assertFalse(new MarkerDetector.Detection(List.of(), List.of(s, s, s)).partial());
+    }
+
+    /** 2 triângulos e 3 quadrados: fica o quadrado que mantém a razão de distâncias dos quadros completos. */
+    @Test
+    void extraSquareIsDiscardedByDistanceRatio() {
+        CameraMatrix cam = CameraMatrix.approximate(new Size(800, 480));
+        Point[] a = projectModel(cam, 0.9, 0.2, 0.1, -60, -40, 450).asArray();
+        Point[] b = projectModel(cam, 0.8, -0.3, 0.2, -50, -30, 700).asArray(); // outra escala e ângulo
+        MarkerDetector.Detection ok1 = complete(a), ok2 = complete(b);
+        double ref = MarkerDetector.referenceRatio(List.of(ok1, ok2));
+
+        // falso positivo perto de um triângulo: a distância aos quadrados fica bem diferente
+        var fake = new MarkerDetector.Shape(new Point(a[0].x + 25, a[0].y + 10), 8);
+        var det = new MarkerDetector.Detection(ok1.triangles(),
+                List.of(ok1.squares().get(0), fake, ok1.squares().get(1)));
+        assertTrue(det.extra());
+
+        var r = MarkerDetector.reduce(det, ref, 0.3);
+        assertNotNull(r);
+        assertTrue(r.detection().complete());
+        assertEquals(List.of(fake), r.discarded());
+        assertTrue(r.detection().squares().containsAll(ok1.squares()));
+
+        assertNull(MarkerDetector.reduce(ok1, ref, 0.3), "sem forma sobrando não há o que reduzir");
+        assertNull(MarkerDetector.reduce(det, Double.NaN, 0.3), "sem quadros completos não há referência");
+    }
+
+    private static MarkerDetector.Detection complete(Point[] p) {
+        return new MarkerDetector.Detection(
+                List.of(new MarkerDetector.Shape(p[0], 10), new MarkerDetector.Shape(p[2], 10)),
+                List.of(new MarkerDetector.Shape(p[1], 10), new MarkerDetector.Shape(p[3], 10)));
     }
 
     private static MarkerDetector.MarkerSet projectModel(CameraMatrix cam, double rx, double ry, double rz, double tx,
