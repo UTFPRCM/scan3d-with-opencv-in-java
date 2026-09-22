@@ -1,14 +1,16 @@
-# Reconstrução 3D com OpenCV e Java
+# Reconstrução 3D com OpenCV
 
-Protótipo para **reconstruir objetos em 3D a partir de fotos tiradas ao redor deles**, usando apenas uma câmera comum e uma folha A4 impressa com um marcador de referência. A primeira versão foi feita em Java com OpenCV 2.4, porém atualmente foi atualizado para OpenCV 4.9.
+Protótipo para **reconstruir objetos em 3D a partir de fotos tiradas ao redor deles**, usando apenas uma câmera comum e uma folha A4 impressa com um marcador de referência. A primeira versão foi feita em Java com OpenCV 2.4, porém, atualizado para OpenCV 4.9.
 
 <p align="center">
   <img src="docs/img/resultado-pose-frente.jpg" width="48%" alt="Saída: marcadores, IDs, moldura do modelo e eixos da pose (vista frontal)">
   <img src="docs/img/resultado-pose-tras.jpg" width="48%" alt="Saída: o mesmo, visto do lado oposto da volta">
 </p>
-<p align="center"><em>Saída real do projeto unificado em dois quadros com ~180° de diferença: T0/S0/T1/S1 são os marcadores identificados, o retângulo verde é o modelo reprojetado com a pose estimada, e os eixos são X (vermelho), Y (verde) e Z (azul, para cima da folha).</em></p>
+<p align="center"><em>Aqui são apresentadas duas imagens com aproximadamente 180° de diferença: T0/S0/T1/S1 são os marcadores identificados, o retângulo verde é o modelo reprojetado com a pose estimada e os eixos: X (vermelho), Y (verde) e Z (azul).</em></p>
 
-> **Status:** protótipo de pesquisa. Tem **interface gráfica** (botões "Processar imagens" e "Visualizar" e visualizador de nuvem) e aproveita **116 de 129** quadros de exemplo, 44 deles com só 3 marcadores (marcados como confiança menor). A nuvem de pontos é montada por **lâminas** (cada contorno vira um plano vertical girado pelo ângulo da câmera) e, nas fotos de exemplo, tem a forma reconhecível do pote, com raio estável (dispersão de ~1 a 2 mm). É exata para objetos de revolução e **aproximada** para os demais. Veja [O que funciona e o que não funciona](#o-que-funciona-e-o-que-não-funciona).
+<p align="center"><img src="docs/img/gui-nuvem.png" width="80%" alt="Nuvem de pontos por lâminas, vista em perspectiva"></p>
+
+> Como pode ser observado na imagem acima, a interface gráfica é composta pelos botões principais: “Processar imagens” e “Visualizar”, além de opções para análise dos resultados. A nuvem de pontos é montada por **lâminas** (cada contorno vira um plano vertical girado pelo ângulo da câmera) e com raio estável (dispersão de ~1 a 2 mm). É exata para objetos de revolução e **aproximada** para os demais. Veja [O que funciona e o que não funciona](#o-que-funciona-e-o-que-não-funciona).
 
 ## Sumário
 
@@ -187,9 +189,11 @@ Nas fotos de exemplo (azimutes de −86° a +80°, ~166°, e não 360°): 37.860
 
 **Limites.** É exata para corpos de revolução (a largura da silhueta é o raio), como o pote. Para outros formatos é uma aproximação: o ponto da borda é posto no plano do eixo, quando poderia estar mais à frente ou atrás, então faces planas ficam "estufadas" e partes côncavas não aparecem. O método geral é o *visual hull* (interseção das silhuetas esticadas). O objeto precisa estar aproximadamente sobre o centro da folha (o desvio fixo é corrigido, mas não um objeto que se mova).
 
-<p align="center"><img src="docs/img/gui-nuvem.png" width="80%" alt="Nuvem de pontos por lâminas, vista em perspectiva"></p>
-<p align="center"><img src="docs/img/gui-nuvem-topo.png" width="80%" alt="Nuvem de pontos por lâminas, vista de cima"></p>
-<p align="center"><em>Saída real (fotos de exemplo): perspectiva e vista de cima. As duas lacunas do anel são os ângulos sem quadros.</em></p>
+<p align="center">
+  <img src="docs/img/gui-nuvem.png" width="48%" alt="Nuvem de pontos por lâminas, vista em perspectiva">
+  <img src="docs/img/gui-nuvem-topo.png" width="48%" alt="Nuvem de pontos por lâminas, vista de cima">
+</p>
+<p align="center"><em>Saída real (fotos de exemplo): perspectiva e vista de cima. As lacunas são os ângulos sem quadros.</em></p>
 
 Nos exemplos abaixo é possivel ver o **resultado que se busca** (um objeto real, sua nuvem de pontos e a malha); estes que foram gerados por outros metodos:
 
@@ -230,17 +234,17 @@ A aba **Nuvem de pontos** é um visualizador próprio em JavaFX (sem OpenGL): pr
 
 <p align="center"><img src="docs/img/gui-nuvem.png" width="85%" alt="Aba Nuvem de pontos"></p>
 
-A aba **Quadros** lista todas as fotos (verde = 4 marcadores, laranja = 3, vermelho = ignorado) e mostra a foto anotada e o motivo. Nos quadros com pose, a anotação traz os marcadores, a moldura e os eixos (formas descartadas aparecem em cinza); nos ignorados, traz todas as formas detectadas (triângulos `T` em magenta, quadrados `S` em amarelo), para ver o que o detector enxergou.
+A aba **Quadros** lista todas as fotos (verde = 4 marcadores, laranja = 3, vermelho = ignorado) e mostra a foto anotada e o motivo. Nos quadros com pose, a anotação traz os marcadores, a moldura e os eixos (formas descartadas aparecem em cinza); nos ignorados, traz todas as formas detectadas (triângulos `T` em magenta, quadrados `S` em amarelo), para verificar o que o detector identificou.
 
 <p align="center"><img src="docs/img/gui-quadros.png" width="85%" alt="Aba Quadros"></p>
 
-A aba **Contornos** lista os quadros com contorno (o número ao lado é a quantidade de pixels) e mostra o contorno do objeto **sobre a foto** (em vermelho, com a foto escurecida) ou **só o contorno**, em preto e branco, como gravado em `output/contours`. Serve para conferir se ele está sobre o objeto e ver o que entrou junto, como a borda de trás da folha e detalhes do rótulo. Dá para filtrar por confiança da pose (4 ou 3 marcadores).
+A aba **Contornos** lista os quadros com contorno (o número ao lado é a quantidade de pixels) e mostra o contorno do objeto **sobre a foto** (em vermelho, com a foto escurecida) ou **só o contorno**, em preto e branco, como gravado em `output/contours`. Serve para conferir se ele está sobre o objeto e ver o que entrou junto, como a borda de trás da folha e detalhes do rótulo.
 
 <p align="center"><img src="docs/img/gui-contornos.png" width="85%" alt="Aba Contornos: contorno do pote sobre a foto"></p>
 
 Observações:
 
-- A nuvem exibida é a de lâminas (veja acima). Os eixos e as unidades mostrados são em pixels de referência; o cabeçalho do PLY, exibido na base da janela, traz a escala.
+- A nuvem exibida é a de lâminas. Os eixos e as unidades mostrados são em pixels de referência; o cabeçalho do PLY, exibido na base da janela, traz a escala.
 - Como o JavaFX traz bibliotecas nativas por sistema, o jar gerado por `mvn package` só funciona no sistema em que foi compilado.
 - Modos de teste da janela, usados para gerar as capturas acima: `--load` (abre já com os resultados), `--process` (dispara o mesmo caminho do botão) e `--screenshot ARQUIVO --tab N` (grava a captura e fecha; abas: 0 Processamento, 1 Nuvem, 2 Quadros, 3 Contornos).
 
