@@ -103,7 +103,7 @@ public final class ContoursPane extends SplitPane {
             List<String> lines = Files.readAllLines(poses);
             for (String line : lines.subList(Math.min(1, lines.size()), lines.size())) {
                 List<String> c = FramesPane.splitCsv(line);
-                if (c.size() < 15) continue; // colunas: veja o cabeçalho de poses.csv
+                if (c.size() < 16) continue; // colunas: veja o cabeçalho de poses.csv
                 String file = c.get(1);
                 String base = file.substring(0, file.lastIndexOf('.'));
                 Path contour = outDir.resolve("contours").resolve(base + ".png");
@@ -111,7 +111,7 @@ public final class ContoursPane extends SplitPane {
                 Path original = inputDir != null ? inputDir.resolve(file) : null;
                 Path photo = original != null && Files.exists(original) ? original
                         : outDir.resolve("annotated").resolve(base + ".jpg");
-                items.add(new Item(file, c.get(2).equals("3"), Integer.parseInt(c.get(14)), contour, photo));
+                items.add(new Item(file, c.get(2).equals("3"), Integer.parseInt(c.get(15)), contour, photo));
             }
         }
         items.sort(java.util.Comparator.comparing(Item::file));

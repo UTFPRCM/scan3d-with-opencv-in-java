@@ -147,6 +147,7 @@ public final class LaminaCloudBuilder {
      */
     public List<PlyWriter.FramePoints> finish() {
         estimateOffset();
+        removeGlobalOutliers();
         List<PlyWriter.FramePoints> out = new ArrayList<>();
         for (Lamina l : laminas) {
             double ct = Math.cos(l.theta()), st = Math.sin(l.theta());
@@ -260,5 +261,48 @@ public final class LaminaCloudBuilder {
         double[] s = v.clone();
         java.util.Arrays.sort(s);
         return s[s.length / 2];
+    }
+
+    /**
+     * Descarta linhas cujo raio ((direita-esquerda)/2) destoa muito da mediana de raio de <b>todas</b> as lâminas.
+     * Complementa {@link #removeSpikes}, que só compara com uma janela de linhas vizinhas: quando o contorno "vaza"
+     * além do objeto numa faixa inteira de altura (por exemplo, a borda de trás da folha encostando no objeto — ver
+     * {@code ObjectContour} — capturada como parte do contorno), a contaminação pode ser uma fração grande de uma
+     * lâmina específica, ou decair devagar até se confundir com o normal; nos dois casos, a mediana daquela lâmina
+     * sozinha não destoa o bastante para acusar nada, mas a mediana de todas as lâminas sim (o objeto real é bem
+     * mais uniforme que isso).
+     */
+    private void removeGlobalOutliers() {
+        List<Double> radii = new ArrayList<>();
+        for (Lamina l : laminas) {
+            for (int i = 0; i < l.heights().length; i++) radii.add((l.right()[i] - l.left()[i]) / 2);
+        }
+        if (radii.size() < 20) return;
+        double[] arr = radii.stream().mapToDouble(Double::doubleValue).toArray();
+        double med = median(arr);
+        double tol = med + 6 * 1.4826 * mad(arr, med);
+        for (int li = 0; li < laminas.size(); li++) {
+            Lamina l = laminas.get(li);
+            int n = l.heights().length;
+            List<Integer> keep = new ArrayList<>();
+            for (int i = 0; i < n; i++) {
+                if ((l.right()[i] - l.left()[i]) / 2 <= tol) keep.add(i);
+            }
+            if (keep.size() == n) continue;
+            double[] hs = new double[keep.size()], left = new double[keep.size()], right = new double[keep.size()];
+            for (int k = 0; k < keep.size(); k++) {
+                int i = keep.get(k);
+                hs[k] = l.heights()[i];
+                left[k] = l.left()[i];
+                right[k] = l.right()[i];
+            }
+            laminas.set(li, new Lamina(l.frame(), l.markers(), l.theta(), hs, left, right, l.mid()));
+        }
+    }
+
+    private static double mad(double[] v, double med) {
+        double[] dev = new double[v.length];
+        for (int i = 0; i < v.length; i++) dev[i] = Math.abs(v[i] - med);
+        return median(dev);
     }
 }

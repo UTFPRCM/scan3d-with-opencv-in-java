@@ -264,8 +264,8 @@ public final class GuiApp extends Application {
             try {
                 framesPane.load(out, in);
                 contoursPane.load(out, in);
-            } catch (IOException ex) {
-                appendLog("Não foi possível ler os quadros: " + ex.getMessage());
+            } catch (IOException | RuntimeException ex) {
+                appendLog("Não foi possível ler os quadros: " + ex);
             }
             phase.setText("Resultados carregados de " + out);
             if (switchTab) tabs.getSelectionModel().select(cloudTab);

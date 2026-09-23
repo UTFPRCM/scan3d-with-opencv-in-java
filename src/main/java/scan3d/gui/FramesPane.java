@@ -104,18 +104,19 @@ public final class FramesPane extends SplitPane {
             List<String> lines = Files.readAllLines(poses);
             for (String line : lines.subList(Math.min(1, lines.size()), lines.size())) {
                 List<String> c = splitCsv(line);
-                if (c.size() < 15) continue; // colunas: veja o cabeçalho de poses.csv
+                if (c.size() < 16) continue; // colunas: veja o cabeçalho de poses.csv
                 String file = c.get(1);
                 boolean low = c.get(2).equals("3");
                 String base = file.substring(0, file.lastIndexOf('.'));
-                // 0 frame, 1 file, 2 markers, 4-6 tx ty tz, 7-9 rx ry rz, 10 reproj, 11 ref_frame, 12 ref_hops, 13 ref_dist, 14 points
+                // 0 frame, 1 file, 2 markers, 3 confidence, 4 level, 5-7 tx ty tz, 8-10 rx ry rz, 11 reproj,
+                // 12 ref_frame, 13 ref_hops, 14 ref_dist, 15 points
                 String confidence = low
-                        ? "Pose recuperada a partir do quadro " + c.get(11) + " (salto " + c.get(12) + "), a " + c.get(13)
+                        ? "Pose recuperada a partir do quadro " + c.get(12) + " (salto " + c.get(13) + "), a " + c.get(14)
                                 + " mm da referência. Com 3 marcadores não há erro de reprojeção para conferir."
-                        : "Erro de reprojeção: " + c.get(10) + " px";
-                String text = String.format("Quadro %s | %s%n%ncâmera (mm): tx %s, ty %s, tz %s%nângulos (°): rx %s, ry %s, rz %s%n%s%nPontos da nuvem neste quadro: %s",
+                        : "Erro de reprojeção: " + c.get(11) + " px";
+                String text = String.format("Quadro %s | %s (nível %s)%n%ncâmera (mm): tx %s, ty %s, tz %s%nângulos (°): rx %s, ry %s, rz %s%n%s%nPontos da nuvem neste quadro: %s",
                         c.get(0), low ? Status.LOW.label : Status.HIGH.label, c.get(4), c.get(5), c.get(6), c.get(7),
-                        c.get(8), c.get(9), confidence, c.get(14));
+                        c.get(8), c.get(9), c.get(10), confidence, c.get(15));
                 items.add(new Item(file, low ? Status.LOW : Status.HIGH, text,
                         outDir.resolve("annotated").resolve(base + ".jpg")));
             }
