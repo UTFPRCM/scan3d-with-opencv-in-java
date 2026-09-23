@@ -44,6 +44,14 @@ public final class PoseEstimator {
     }
 
     public Pose estimate(MarkerDetector.MarkerSet markers) {
+        return estimate(markers, false);
+    }
+
+    /**
+     * @param lowConfidence true se um dos 4 marcadores veio de {@link MarkerDetector#reclassify}: a posição ainda
+     *                      é usada no solvePnP, mas o resultado é marcado como menos confiável (ver {@link Pose}).
+     */
+    public Pose estimate(MarkerDetector.MarkerSet markers, boolean lowConfidence) {
         MatOfPoint3f objectPoints = new MatOfPoint3f();
         objectPoints.fromList(MODEL);
         MatOfPoint2f imagePoints = new MatOfPoint2f(markers.asArray());
@@ -51,7 +59,7 @@ public final class PoseEstimator {
         Mat rvec = new Mat();
         Mat tvec = new Mat();
         Calib3d.solvePnP(objectPoints, imagePoints, cameraMatrix, distCoeffs, rvec, tvec);
-        return toPose(rvec, tvec, reprojectionError(objectPoints, markers, rvec, tvec), 4);
+        return toPose(rvec, tvec, reprojectionError(objectPoints, markers, rvec, tvec), 4, lowConfidence);
     }
 
     /**
@@ -92,7 +100,7 @@ public final class PoseEstimator {
 
         double[] refCenter = cameraCenter(reference.rotation(), reference.tvec());
         Recovered best = null;
-        double bestDist = Double.MAX_VALUE;
+        double bestScore = Double.MAX_VALUE;
         for (int hyp : singleHyp) {
             int[] ids = missingTriangle ? new int[] {hyp, pairIds[0], pairIds[1]} : new int[] {pairIds[0], pairIds[1], hyp};
             Point[] pts = missingTriangle ? new Point[] {single, pair[0], pair[1]} : new Point[] {pair[0], pair[1], single};
@@ -111,12 +119,17 @@ public final class PoseEstimator {
                 if (tvecs.get(i).get(2, 0)[0] <= 0 || c[2] >= 0) continue;
                 double dist = Math.sqrt(Math.pow(c[0] - refCenter[0], 2) + Math.pow(c[1] - refCenter[1], 2)
                         + Math.pow(c[2] - refCenter[2], 2));
-                if (dist >= bestDist) continue;
+                double rotDeg = rotationDifferenceDeg(rot, reference.rotation());
+                // desempata pela posição E pela rotação: só a posição deixa passar hipóteses com a câmera no lugar
+                // certo mas virada para outro lado (a folha, vista de perto, muda pouco a posição da câmera entre
+                // soluções do P3P mas pode mudar bastante a rotação). A escala (mm por grau) é a mesma proporção dos
+                // limites normais de aceitação (60 mm / 30° a cada quadro de distância).
+                double score = dist + rotDeg * 2.0;
+                if (score >= bestScore) continue;
                 Point[] used = new Point[4];
                 for (int k = 0; k < 3; k++) used[ids[k]] = pts[k];
-                bestDist = dist;
-                best = new Recovered(toPose(rvecs.get(i), tvecs.get(i), Double.NaN, 3), used, dist,
-                        rotationDifferenceDeg(rot, reference.rotation()));
+                bestScore = score;
+                best = new Recovered(toPose(rvecs.get(i), tvecs.get(i), Double.NaN, 3, true), used, dist, rotDeg);
             }
         }
         if (best == null || best.refDistMm() > maxJumpMm || best.refRotDeg() > maxRotDeg) return null;
@@ -156,7 +169,7 @@ public final class PoseEstimator {
         return Math.toDegrees(Math.acos(Math.max(-1, Math.min(1, (trace - 1) / 2))));
     }
 
-    private static Pose toPose(Mat rvec, Mat tvec, double reprojError, int markers) {
+    private static Pose toPose(Mat rvec, Mat tvec, double reprojError, int markers, boolean lowConfidence) {
         Mat rot = new Mat();
         Calib3d.Rodrigues(rvec, rot);
         double m00 = rot.get(0, 0)[0], m10 = rot.get(1, 0)[0];
@@ -172,7 +185,7 @@ public final class PoseEstimator {
             rz = 0;
         }
         return new Pose(rvec, tvec, rot, Math.toDegrees(rx), Math.toDegrees(ry), Math.toDegrees(rz), reprojError,
-                markers);
+                markers, lowConfidence);
     }
 
     private double reprojectionError(MatOfPoint3f obj, MarkerDetector.MarkerSet markers, Mat rvec, Mat tvec) {

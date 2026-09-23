@@ -39,6 +39,14 @@ public final class MarkerDetector {
         public boolean partial() {
             return (triangles.size() == 2 && squares.size() == 1) || (triangles.size() == 1 && squares.size() == 2);
         }
+
+        /**
+         * 4 formas no total, mas divididas 1 e 3 em vez de 2 e 2: costuma ser um triângulo cujo canto foi tapado
+         * pelo objeto, ganhando um vértice a mais e virando quadrado (ou, mais raro, o inverso).
+         */
+        public boolean misclassified() {
+            return (triangles.size() == 1 && squares.size() == 3) || (triangles.size() == 3 && squares.size() == 1);
+        }
     }
 
     /** Detecção reduzida a 2 triângulos + 2 quadrados e as formas que ficaram de fora. */
@@ -103,6 +111,49 @@ public final class MarkerDetector {
         Detection kept = new Detection(List.of(tri.get(best[0]), tri.get(best[1])),
                 List.of(sq.get(best[2]), sq.get(best[3])));
         return new Reduced(kept, discarded, bestErr);
+    }
+
+    /**
+     * Quando há 1 forma de um tipo e 3 do outro ({@link Detection#misclassified()}), testa reclassificar cada
+     * candidata como se fosse a forma que faltou (a posição do centroide continua válida mesmo que o número de
+     * vértices tenha mudado por oclusão) e aceita como candidatas as que deixam a {@link #pairRatio razão} perto o
+     * bastante da referência. Entre essas, fica a de menor raio: a oclusão que cria ou apaga um vértice também
+     * costuma encolher o contorno (marcador parcialmente tapado), enquanto os outros 2 "quadrados" tendem a ser só
+     * os quadrados de verdade, quase sempre nas mesmas posições de quadro para quadro — nesse caso a razão de
+     * distâncias por si só pode favorecer trocar um quadrado real por outro, coincidentemente parecida com a da
+     * referência. Nada é descartado: as 4 formas ficam, só a classificação de uma muda.
+     *
+     * @param tolerance desvio relativo máximo aceito em relação à referência (0,3 = 30%)
+     * @return a detecção com 2 triângulos + 2 quadrados, ou null se não for o caso 1-e-3, se faltar referência ou se
+     *         nenhuma reclassificação chegar perto dela
+     */
+    public static Reduced reclassify(Detection d, double refRatio, double tolerance) {
+        if (Double.isNaN(refRatio) || !d.misclassified()) return null;
+        boolean promoteSquare = d.triangles().size() == 1; // 1 triângulo + 3 quadrados: um quadrado é o triângulo
+        List<Shape> minority = promoteSquare ? d.triangles() : d.squares();
+        List<Shape> majority = promoteSquare ? d.squares() : d.triangles();
+        Shape fixed = minority.get(0);
+
+        double[] err = new double[majority.size()];
+        int best = -1;
+        for (int i = 0; i < majority.size(); i++) {
+            Shape candidate = majority.get(i);
+            List<Shape> rest = new ArrayList<>(majority);
+            rest.remove(i);
+            double ratio = promoteSquare ? pairRatio(fixed, candidate, rest.get(0), rest.get(1))
+                    : pairRatio(rest.get(0), rest.get(1), fixed, candidate);
+            err[i] = Math.abs(ratio / refRatio - 1);
+            if (err[i] > tolerance) continue;
+            if (best < 0 || candidate.radius() < majority.get(best).radius()) best = i;
+        }
+        if (best < 0) return null;
+
+        Shape reclassified = majority.get(best);
+        List<Shape> rest = new ArrayList<>(majority);
+        rest.remove(best);
+        Detection kept = promoteSquare ? new Detection(List.of(fixed, reclassified), rest)
+                : new Detection(rest, List.of(fixed, reclassified));
+        return new Reduced(kept, List.of(), err[best]);
     }
 
     /** Quatro centros na ordem do modelo 3D: tri0, sq0, tri1, sq1. */

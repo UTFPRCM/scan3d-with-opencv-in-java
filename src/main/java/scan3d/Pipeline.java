@@ -65,6 +65,7 @@ public final class Pipeline {
         int refFrame = -1;
         int hops;              // 0 = 4 marcadores; n = n-ésimo quadro encadeado a partir de um de 4 marcadores
         double refDistMm = Double.NaN;
+        boolean forced;        // nível 3: recuperado sem quadro de referência confiável a maxGap quadros
 
         Frame(int index, Path file) {
             this.index = index;
@@ -137,14 +138,22 @@ public final class Pipeline {
             for (Frame f : frames) {
                 if (f.pose != null) continue;
                 MarkerDetector.Reduced r = MarkerDetector.reduce(f.detection, refRatio, MAX_RATIO_ERROR);
+                // 1 triângulo + 3 quadrados (ou o inverso): nenhuma forma sobra, uma delas foi mal classificada
+                // (oclusão criou/tapou um vértice); tenta reclassificar em vez de descartar. A posição do centroide
+                // da forma reclassificada pode estar deslocada, então a pose sai com confiança menor.
+                String kind = "ficaram 2 e 2 (razão entre distâncias a %.0f%% da dos outros quadros)";
+                boolean reclassified = false;
+                if (r == null) {
+                    r = MarkerDetector.reclassify(f.detection, refRatio, MAX_RATIO_ERROR);
+                    kind = "1 forma reclassificada (razão entre distâncias a %.0f%% da dos outros quadros)";
+                    reclassified = true;
+                }
                 if (r == null) continue;
-                listener.log(String.format(Locale.ROOT,
-                        "%s: %s; ficaram 2 e 2 (razão entre distâncias a %.0f%% da dos outros quadros)", f.name(),
-                        counts(f), r.ratioError() * 100));
+                listener.log(String.format(Locale.ROOT, "%s: %s; " + kind, f.name(), counts(f), r.ratioError() * 100));
                 f.detection = r.detection();
                 f.discarded = r.discarded();
                 MarkerDetector.MarkerSet markers = detector.order(f.detection);
-                f.pose = estimator.estimate(markers);
+                f.pose = estimator.estimate(markers, reclassified);
                 f.used = markers.asArray();
             }
         }
@@ -157,6 +166,7 @@ public final class Pipeline {
             if (f.pose != null) continue;
             if (cfg.minMarkers() > 3 || !f.detection.partial()) {
                 skip(skipped, listener, f.name() + ": " + counts(f) + "; " + (f.detection.extra()
+                        || f.detection.misclassified()
                         ? "nenhuma combinação de 2 e 2 é coerente com a distância entre marcadores dos outros quadros"
                         : "precisa de " + (cfg.minMarkers() > 3 ? "2 e 2" : "2 e 2, ou 2 e 1, ou 1 e 2")));
             } else {
@@ -183,9 +193,34 @@ public final class Pipeline {
             // só vale na camada seguinte: dentro da mesma camada todos usam o mesmo conjunto de referências
             pending.removeAll(solved);
         }
+        // ---- Nível 3: mesmos 3 marcadores, mas sem exigir referência a até maxGap quadros nem salto/rotação
+        // dentro do limite normal. Só desiste se não houver pose nenhuma na sequência para servir de referência, ou
+        // se nenhuma das hipóteses do P3P for fisicamente válida (câmera atrás da folha ou abaixo dela). Processa em
+        // ordem de índice, então um quadro já resolvido neste nível vira referência (melhor que a original) para o
+        // próximo — em geral só quando faltam vários quadros de 4 marcadores em sequência.
         for (Frame f : pending) {
-            skip(skipped, listener, f.name() + ": " + counts(f) + "; sem referência confiável a até " + cfg.maxGap()
-                    + " quadros, ou pose inconsistente com ela");
+            Frame ref = nearestWithPose(frames, f, Integer.MAX_VALUE, Integer.MAX_VALUE);
+            if (ref == null) {
+                skip(skipped, listener,
+                        f.name() + ": " + counts(f) + "; nenhum quadro da sequência tem pose para servir de referência");
+                continue;
+            }
+            PoseEstimator.Recovered r = estimator.estimateFromThree(f.detection, ref.pose, Double.MAX_VALUE,
+                    Double.MAX_VALUE);
+            if (r == null) {
+                skip(skipped, listener, f.name() + ": " + counts(f)
+                        + "; nenhuma das hipóteses do P3P é fisicamente válida (câmera atrás da folha ou abaixo dela)");
+                continue;
+            }
+            f.pose = r.pose();
+            f.used = r.used();
+            f.refFrame = ref.index;
+            f.refDistMm = r.refDistMm();
+            f.hops = ref.hops + 1;
+            f.forced = true;
+            listener.log(String.format(Locale.ROOT,
+                    "%s: %s; nível 3 (sem referência confiável a %d quadros): %.0f mm / %.1f° de %s", f.name(),
+                    counts(f), cfg.maxGap(), r.refDistMm(), r.refRotDeg(), ref.name()));
         }
 
         // quadros ignorados também ganham a foto anotada, com todas as formas detectadas, para ver o que houve
@@ -201,7 +236,7 @@ public final class Pipeline {
         int used4 = 0, used3 = 0;
 
         try (BufferedWriter poses = Files.newBufferedWriter(cfg.output().resolve("poses.csv"))) {
-            poses.write("frame,file,markers,confidence,tx_mm,ty_mm,tz_mm,rx_deg,ry_deg,rz_deg,reproj_rms_px,"
+            poses.write("frame,file,markers,confidence,level,tx_mm,ty_mm,tz_mm,rx_deg,ry_deg,rz_deg,reproj_rms_px,"
                     + "ref_frame,ref_hops,ref_dist_mm,points\n");
             for (int n = 0; n < accepted.size(); n++) {
                 listener.progress("Gerando contornos e nuvem", n, accepted.size());
@@ -212,13 +247,18 @@ public final class Pipeline {
 
                 // o objeto fica dentro do retângulo dos marcadores: o contorno só vale nessa região, reprojetada com a pose
                 Mat mask = contour.extract(bgr, estimator.project(ObjectContour.volumeCorners(), f.pose));
-                int pointCount = cloudBuilder.add(f.index, f.pose.markers(), mask, f.pose);
+                // a coluna "markers" do PLY (e a GUI) só distinguem 3 de 4; uma pose de baixa confiança conta como 3
+                // mesmo com f.pose.markers() == 4, para não aparecer como confiança normal em cloud.ply/GUI.
+                int pointCount = cloudBuilder.add(f.index, f.pose.lowConfidence() ? 3 : f.pose.markers(), mask, f.pose);
                 if (f.pose.lowConfidence()) used3++;
                 else used4++;
 
                 Pose p = f.pose;
-                poses.write(String.format(Locale.ROOT, "%d,%s,%d,%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%s,%s,%s,%s,%d%n",
-                        f.index, csv(name), p.markers(), p.lowConfidence() ? "low" : "high",
+                // nível 1 = 4 marcadores com confiança normal; 2 = 3 marcadores (ou forma reclassificada) com
+                // referência próxima e pose consistente com ela; 3 = 3 marcadores sem referência confiável por perto
+                int level = !p.lowConfidence() ? 1 : (f.forced ? 3 : 2);
+                poses.write(String.format(Locale.ROOT, "%d,%s,%d,%s,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%s,%s,%s,%s,%d%n",
+                        f.index, csv(name), p.markers(), p.lowConfidence() ? "low" : "high", level,
                         p.tvec().get(0, 0)[0], p.tvec().get(1, 0)[0], p.tvec().get(2, 0)[0],
                         p.rxDeg(), p.ryDeg(), p.rzDeg(),
                         Double.isNaN(p.reprojError()) ? "" : String.format(Locale.ROOT, "%.2f", p.reprojError()),
@@ -346,8 +386,9 @@ public final class Pipeline {
         Imgproc.line(img, axes[0], axes[2], new Scalar(0, 255, 0), 2);
         Imgproc.line(img, axes[0], axes[3], new Scalar(255, 0, 0), 2);
         if (low) {
-            Imgproc.putText(img, "3 marcadores (confianca menor)", new Point(10, 24), Imgproc.FONT_HERSHEY_SIMPLEX,
-                    0.6, frameColor, 2);
+            String msg = f.forced ? "3 marcadores, nivel 3 (sem referencia proxima confiavel)"
+                    : "3 marcadores (confianca menor)";
+            Imgproc.putText(img, msg, new Point(10, 24), Imgproc.FONT_HERSHEY_SIMPLEX, 0.6, frameColor, 2);
         }
         return img;
     }

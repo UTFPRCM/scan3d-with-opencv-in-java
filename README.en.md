@@ -1,6 +1,6 @@
 # 3D Reconstruction with OpenCV and Java
 
-Prototype to **reconstruct 3D objects from photos taken around them**, using only a regular camera and an A4 sheet printed with a reference marker. The first version was written in Java with OpenCV 2.4, but it has since been updated to OpenCV 4.9.
+This work presents a prototype for the three-dimensional reconstruction of objects from a set of photographs captured around them, using only a conventional camera and an A4 sheet printed with a spatial reference marker. The original implementation was developed in Java with OpenCV 2.4 and later ported to version 4.9.
 
 > This is the English version of the README. The Portuguese version (`README.md`) is the primary/canonical one; this file is a translation kept in sync with it.
 
@@ -8,49 +8,49 @@ Prototype to **reconstruct 3D objects from photos taken around them**, using onl
   <img src="docs/img/resultado-pose-frente.jpg" width="48%" alt="Output: markers, IDs, model frame and pose axes (front view)">
   <img src="docs/img/resultado-pose-tras.jpg" width="48%" alt="Output: the same, seen from the opposite side of the turn">
 </p>
-<p align="center"><em>The two images above, ~180° apart: T0/S0/T1/S1 are the identified markers, the green rectangle is the model reprojected with the estimated pose, and the axes are X (red), Y (green) and Z (blue, pointing up from the sheet).</em></p>
+<p align="center"><em>Pair of images approximately 180° apart. T0/S0/T1/S1 denote the detected markers; the green rectangle is the model reprojected from the estimated pose; the axes X (red), Y (green) and Z (blue) indicate the marker's coordinate system.</em></p>
 
 <p align="center"><img src="docs/img/gui-nuvem.png" width="80%" alt="Point cloud from slices, perspective view"></p>
 
-> **Status:** Has a **graphical interface** (main buttons: "Process images" and "View", plus options to analyze the results). The point cloud is assembled by **slices** (each contour becomes a vertical plane rotated by the camera angle) with a stable radius (dispersion of ~1 to 2 mm). It is exact for solids of revolution and **approximate** for everything else. See [What works and what doesn't](#what-works-and-what-doesnt).
+> As shown in the image above, the graphical interface brings together the main controls — "Process images" and "View" — along with tools for result analysis. The point cloud is assembled by **slices** (each contour is converted into a vertical plane rotated by the estimated camera angle), yielding a stable radius (dispersion of roughly 1 to 2 mm). The method is exact for solids of revolution and approximate for every other case. See [Results and limitations](#results-and-limitations).
 
 ## Contents
 
-1. [The idea](#the-idea)
-2. [The marker](#the-marker)
+1. [Overview](#overview)
+2. [The reference marker](#the-reference-marker)
 3. [Process flowchart](#process-flowchart)
 4. [Fundamentals: camera, calibration and pose](#fundamentals-camera-calibration-and-pose)
 5. [From silhouette to 3D cloud (slices)](#from-silhouette-to-3d-cloud-slices)
 6. [Frames with 3 markers](#frames-with-3-markers)
 7. [Graphical interface](#graphical-interface)
-8. [What works and what doesn't](#what-works-and-what-doesnt)
+8. [Results and limitations](#results-and-limitations)
 9. [Repository structure](#repository-structure)
-10. [How to run](#how-to-run)
-11. [Next steps](#next-steps)
+10. [Installation and execution](#installation-and-execution)
+11. [Future work](#future-work)
 
-## The idea
+## Overview
 
-An object is placed at the center of an A4 sheet. The camera makes a **360°** turn around it, capturing a frame every few degrees. In each frame:
+The object of interest is placed at the center of an A4 sheet. The camera performs a path of approximately **360°** around it, capturing a frame at intervals of a few degrees. For each frame, the method executes the following steps:
 
-1. the **marker** printed on the sheet reveals where the camera is and where it's pointing (the *pose*);
-2. the **object's contour** is isolated;
-3. every pixel of the contour, given the pose, is converted into real-world coordinates (mm);
-4. the points from all frames together would form a **3D point cloud**.
+1. the **marker** printed on the sheet determines the camera's position and orientation (the *pose*);
+2. the **object's contour** is isolated in the image;
+3. each pixel of the contour, given the pose, is converted into real-world coordinates (mm);
+4. the set of points from all frames composes the **three-dimensional point cloud**.
 
-In the taxonomy of 3D acquisition techniques, this is a **passive optical** technique (a camera, no light projection) and, in practice, a variation of *Shape from Silhouette* ([Temporal Shape-From-Silhouette](https://www.cs.cmu.edu/~german/research/TSFS/tsfs.html)): the model comes from contours seen from multiple angles.
+According to the taxonomy of 3D acquisition techniques, this is a **passive optical** technique (a single camera, no structured light projection), corresponding, in practice, to a variation of the *Shape from Silhouette* method ([Temporal Shape-From-Silhouette](https://www.cs.cmu.edu/~german/research/TSFS/tsfs.html)). The geometric model is obtained from contours observed across multiple viewing angles.
 
 <p align="center"><img src="docs/img/tecnicas-reconstrucao-3d.png" width="60%" alt="Tree of optical 3D acquisition techniques"></p>
 
-## The marker
+## The reference marker
 
-The marker is **2 black triangles and 2 black squares (≈ 2 × 2 cm)** in the corners of a landscape A4 sheet, with the object at the center. The template used is at [`docs/img/A4-base-scan3D.png`](docs/img/A4-base-scan3D.png) (3508×2480 px = A4 at 300 dpi); the 0°-to-360° polar diagram in the middle is a reference for each photo's angle.
+The marker consists of **two black triangles and two black squares (≈ 2 × 2 cm)** placed at the corners of a landscape-oriented A4 sheet, with the object at the center. The template used is available at [`docs/img/A4-base-scan3D.png`](docs/img/A4-base-scan3D.png) (3508×2480 px, equivalent to A4 at 300 dpi); the 0°-to-360° polar diagram at the center provides a reference for each photograph's capture angle.
 
 <p align="center">
   <img src="docs/img/imagem-base-referencia-coordenada.png" width="48%" alt="Marker template">
   <img src="docs/img/imagem-base-padrao.jpg" width="48%" alt="Marker detected in a photo, with IDs">
 </p>
 
-The four centers are the 3D↔2D correspondence points for `solvePnP`. The code assumes the sheet's plane as `Z = 0`, with triangles in the left column and squares in the right:
+The four centroids constitute the 3D↔2D correspondence points used by the `solvePnP` function. The sheet's plane is assumed as `Z = 0`, with triangles placed in the left column and squares in the right:
 
 ```text
    tri0 (0, 0)      ────── 187 mm ──────   sq0 (187, 0)
@@ -60,9 +60,9 @@ The four centers are the 3D↔2D correspondence points for `solvePnP`. The code 
    tri1 (0, 161)    ────── 187 mm ──────   sq1 (187, 161)
 ```
 
-Measurements on the template (A4 = 297 × 210 mm): using the triangles' centroid, the horizontal spacing comes out to ≈ 185 mm and the vertical to ≈ 160 mm, consistent with the model's 187 × 161 mm. (The minimum enclosing circle's center falls on the middle of the hypotenuse and would give ≈ 178 mm.)
+Measurements taken on the template (A4 sheet, 297 × 210 mm) indicate, from the triangles' centroid, a horizontal spacing of approximately 185 mm and a vertical spacing of 160 mm, values consistent with the model's 187 × 161 mm. The center of the minimum enclosing circle, in turn, falls at the midpoint of the hypotenuse, yielding an approximate distance of 178 mm.
 
-## Process flowchart:
+## Process flowchart
 
 ```mermaid
 flowchart TD
@@ -94,14 +94,14 @@ flowchart TD
 | Calibration | `findChessboardCorners` → `calibrateCamera` | [`Calibrator`](src/main/java/scan3d/Calibrator.java) |
 
 <p align="center"><img src="docs/img/escala-de-cinza-contornos.png" width="80%" alt="Color → grayscale → edges"></p>
-<p align="center"><em>Generic illustration of the color → grayscale → edges sequence (reference figure, not actual project output).</em></p>
+<p align="center"><em>Schematic illustration of the color → grayscale → edge-detection sequence (illustrative figure; not actual system output).</em></p>
 
-**Marker detection.** The order `tri0, sq0, tri1, sq1` no longer comes from the enumeration of contours. Over a 360° turn the marker appears at any rotation (halfway through the turn the squares end up on the left), so the code uses orientation instead: since the camera looks at the sheet from above, the cross product between the triangle→square axis and the axis between the two same-type shapes has a fixed sign, which identifies which is "0" and which is "1". Frames with 4 markers give the best-quality pose. With 3, the pose is recovered another way (next section); with fewer, the frame is **skipped**, not guessed.
+**Marker detection.** Determining the sequence `tri0, sq0, tri1, sq1` no longer depends on the order in which contours are enumerated. Since the marker can appear at any rotation over a 360° turn (halfway through, the squares end up on the left), the algorithm relies on an orientation criterion instead: because the camera looks at the sheet from above, the cross product between the triangle→square axis and the axis connecting the two same-type shapes has a constant sign, which unambiguously identifies which set corresponds to "0" and which to "1". Frames with all four markers yield the highest-quality pose estimate; with three markers, the pose is recovered through an alternative procedure (see next section); with fewer than three, the frame is **discarded**.
 
-**The "mask" is a contour, not a filled region.** [`ObjectContour`](src/main/java/scan3d/ObjectContour.java) uses a different edge image than the marker one: `Canny` straight from grayscale (thresholds 20 and 100) with 2×2 dilation, as in the code that generated `out/`. Example02's edges (`adaptiveThreshold` before `Canny`) are good for finding markers, but fragmented the object's contour. Afterward, the object stands inside the markers' rectangle, so the rectangle (shrunk by 25 mm to exclude the markers and extended 250 mm upward) is reprojected with the frame's pose and only edges inside it count. This removes the background, the markers, and the sheet-edge lines that connected to the pot. Among the remaining edges, the component with the largest bounding box is kept, plus a thin band around it. **Limits:** the object needs to fit inside the markers' rectangle and be up to 250 mm tall, and the **back edge of the sheet** still shows up in some frames, behind the object (it falls inside the region along the same line of sight).
+The extraction of the object's contour, implemented in [`ObjectContour`](src/main/java/scan3d/ObjectContour.java), uses an edge image distinct from the one used for marker detection: the Canny operator is applied directly to the grayscale image (thresholds 20 and 100), followed by 2×2 morphological dilation. The `adaptiveThreshold` step that precedes `Canny` in marker detection is suitable for that purpose, but fragments the object's contour when applied in the same way. A region of interest corresponding to the area enclosed by the reference points is then delimited, which removes the background, the markers themselves, and the sheet's edge lines. Among the remaining contours, the component with the largest extent is selected, together with a thin band surrounding it. **Limitations:** the object must fit inside the rectangle defined by the markers and not exceed 250 mm in height; additionally, the **sheet's back edge** still appears in some frames, behind the object, since it lies along the same line of sight.
 
 <p align="center"><img src="docs/img/mascara.png" width="70%" alt="Mask concept: image, mask, result"></p>
-<p align="center"><em>Mask concept (generic image; the actual output is the thin silhouette in <code>output/contours</code>).</em></p>
+<p align="center"><em>Schematic representation of the mask concept (illustrative image; the actual output corresponds to the thin silhouette in <code>output/contours</code>).</em></p>
 
 ## Fundamentals: camera, calibration and pose
 
@@ -112,7 +112,7 @@ flowchart TD
   <img src="docs/img/triangulacao.png" width="55%" alt="Projection of a 3D point onto the image plane">
 </p>
 
-A 3D point `(X, Y, Z)` projects onto pixel `(u, v)` by:
+The projection of a three-dimensional point `(X, Y, Z)` onto pixel `(u, v)` is modeled by the pinhole camera according to the equation:
 
 ```text
 s · [u v 1]ᵀ = K · [R | t] · [X Y Z 1]ᵀ
@@ -124,19 +124,19 @@ s · [u v 1]ᵀ = K · [R | t] · [X Y Z 1]ᵀ
     [R | t]                 extrinsics: depend on the camera's position in each photo
 ```
 
-- `fx, fy`: focal length in **pixels**; `(cx, cy)`: principal point (usually the image center).
-- If the image is resized, `fx, fy, cx, cy` change by the same proportion.
+- `fx, fy` correspond to the focal length expressed in **pixels**; `(cx, cy)` denotes the principal point, generally coincident with the image center.
+- Resizing the image changes `fx, fy, cx, cy` by the same proportion.
 
 <p align="center">
   <img src="docs/img/distancia-focal.jpg" width="40%" alt="Focal length">
   <img src="docs/img/distancia-focal-sensor-lente.jpg" width="40%" alt="Focal length, sensor and lens">
 </p>
 
-By similar triangles, with `P` the width in pixels, `W` the real width and `D` the distance, `F = (P · D) / W`. This is useful to estimate a single distance, but **does not replace `solvePnP`**, which uses several points and returns the full pose.
+By similar triangles, with `P` the width in pixels, `W` the object's real width and `D` the distance to the camera, `F = (P · D) / W`. This relation allows estimating a single distance but **does not replace the `solvePnP` function**, which uses multiple correspondence points and returns the camera's full pose.
 
 ### Intrinsics: `TextMatrix.txt`
 
-The values come from a calibration done in 2017 (8×6 checkerboard, 50 mm squares, `CALIB_FIX_PRINCIPAL_POINT`). The original code only printed the matrix and the numbers were copied by hand into the file's single line. It was ported to the `calibrate` command (see [How to run](#how-to-run)), which now writes the file on its own and, in the 11-value format, also stores the calibration's resolution:
+The intrinsic matrix values come from a calibration performed in 2017 (8×6 checkerboard, 50 mm squares, `CALIB_FIX_PRINCIPAL_POINT` option). In the original implementation, the program only printed the matrix, whose values were manually transcribed into the file's single line. This step was automated through the `calibrate` command (see [Installation and execution](#installation-and-execution)), which now writes the file autonomously and, in the extended 11-value format, also records the resolution used in the calibration:
 
 ```text
 fx, 0, cx, 0, fy, cy, 0, 0, 1
@@ -144,32 +144,32 @@ fx, 0, cx, 0, fy, cy, 0, 0, 1
 fx, 0, cx, 0, fy, cy, 0, 0, 1, width, height                    (new, 11 values)
 ```
 
-<p align="center"><img src="docs/img/A4-circles-pattern.png" width="40%" alt="OpenCV asymmetric circles pattern"></p>
-<p align="center"><em><code>A4-circles-pattern.png</code>: alternative calibration pattern (circle grid) kept in <code>docs/img</code>; the code uses a checkerboard.</em></p>
+<p align="center"><img src="docs/img/A4-chessboard.png" width="40%" alt="OpenCV asymmetric circles pattern"></p>
+<p align="center"><em>Alternative calibration pattern based on an asymmetric circle grid, available in <code>docs/img</code>; the current implementation uses a checkerboard.</em></p>
 
-> In the project, over the 72 frames where markers were detected: with the original `TextMatrix.txt`, the median reprojection error is **26 px** (max 47 px); with an approximate camera (`--approx-camera`: `f` = image width, principal point at the center) it drops to **1.2 px**. That's why the program warns when `K` doesn't match the photos' resolution, and the most important step before practical tests is to recalibrate at the camera's real resolution.
+> Considering the 72 frames in which markers were detected, the median reprojection error is **26 px** (maximum 47 px) when using the original `TextMatrix.txt`, dropping to **1.2 px** under an approximate camera (`--approx-camera`: `f` equal to the image width, principal point at the center). For this reason, the program issues a warning when `K` does not match the photographs' resolution, and recalibrating at the camera's actual resolution is the most relevant step prior to practical testing.
 
 ### Extrinsics: `solvePnP`
 
 <p align="center"><img src="docs/img/coordenadas-real-coordenadas-pixels.png" width="65%" alt="World, camera and image-plane coordinate systems, with the projection equation"></p>
 
-For each photo, `solvePnP(objectPoints, imagePoints, K, distCoeffs)` (in [`PoseEstimator`](src/main/java/scan3d/PoseEstimator.java)) receives:
+For each photograph, the function `solvePnP(objectPoints, imagePoints, K, distCoeffs)`, implemented in [`PoseEstimator`](src/main/java/scan3d/PoseEstimator.java), receives as parameters:
 
-- `objectPoints`: the marker's 4 centers in the world, in mm, with `Z = 0` (table above);
-- `imagePoints`: the 4 detected centers, in pixels;
-- `distCoeffs`: currently **zeros**, i.e. lens distortion is ignored.
+- `objectPoints`: the coordinates of the marker's four centers in the world reference frame, in mm, with `Z = 0` (see table above);
+- `imagePoints`: the coordinates of the four detected centers in the image, in pixels;
+- `distCoeffs`: currently **zero**, i.e., lens distortion effects are not taken into account.
 
-It returns `rvec` (rotation, Rodrigues vector) and `tvec` (translation, mm): the **extrinsic of that frame**. `Calib3d.Rodrigues(rvec)` converts `rvec` into a 3×3 matrix `R`.
+The function returns the rotation vector `rvec` (Rodrigues representation) and the translation vector `tvec` (in mm), which constitute the **extrinsic parameters** of that frame. The conversion of `rvec` into the 3×3 rotation matrix `R` is performed by `Calib3d.Rodrigues(rvec)`.
 
 <p align="center">
   <img src="docs/img/triangulacao-3d.png" width="48%" alt="Pinhole camera and 3D point">
   <img src="docs/img/detectacao-objeto-retangular.png" width="48%" alt="Pose estimation and reprojection of a model over a box">
 </p>
-<p align="center"><em>Right: example of an estimated pose and reprojection. The project does something similar in <code>output/annotated</code>, drawing the model's frame and axes over the sheet.</em></p>
+<p align="center"><em>Right: example of an estimated pose and its reprojection. An analogous procedure is carried out by the system in <code>output/annotated</code>, where the model's frame and coordinate axes are overlaid on the sheet's image.</em></p>
 
 ### Angles
 
-`PoseEstimator` extracts Euler angles (Z-Y-X convention) from `R` and writes them to `poses.csv`. Each frame's angle **around the object** is not one of them: it's the camera's azimuth relative to the sheet's center, computed from `R` and `t` in [`LaminaCloudBuilder`](src/main/java/scan3d/LaminaCloudBuilder.java).
+`PoseEstimator` extracts Euler angles (Z-Y-X convention) from `R` and records them in `poses.csv`. Each frame's rotation angle around the object, however, does not correspond to any of these three angles: it is the **camera's azimuth** relative to the sheet's center, computed from `R` and `t` in [`LaminaCloudBuilder`](src/main/java/scan3d/LaminaCloudBuilder.java).
 
 <p align="center">
   <img src="docs/img/matriz-rotacao.png" width="40%" alt="Rotation matrix">
@@ -178,46 +178,46 @@ It returns `rvec` (rotation, Rodrigues vector) and `tvec` (translation, mm): the
 
 ## From silhouette to 3D cloud (slices)
 
-The idea: treat each photo's contour as a **standing 2D slice**, on the vertical plane that passes through the rotation axis (Z, through the sheet's center), and rotate the slice by that frame's camera angle. The set of slices forms the object. Implemented in [`LaminaCloudBuilder`](src/main/java/scan3d/LaminaCloudBuilder.java):
+The underlying principle is to treat each photograph's contour as a **standing 2D slice**, lying on the vertical plane that contains the rotation axis (Z, passing through the sheet's center), rotated by the camera angle estimated for that frame. The set of slices composes the reconstructed object. The implementation is found in [`LaminaCloudBuilder`](src/main/java/scan3d/LaminaCloudBuilder.java) and comprises the following steps:
 
-1. **Angle.** The camera's azimuth around the sheet's center, taken from the pose, relative to the first frame (which is set to 0°). The actual steps are irregular (hand-held camera), so no fixed 1° or 2° step is assumed.
-2. **Position and scale.** Each contour pixel is cast as a ray from the camera and **intersected with the slice's plane**. This handles perspective and camera tilt at once, and normalizes size: the image scale changes with distance (in the example photos, almost 2×) and height (higher points appear closer), but an object of the same size gives the same size in any frame.
-3. **Unit.** The cloud comes out in **reference pixels** (a pixel from the first frame at axis height), without mm. It's just a constant unit change, so the scale is linear; the factor (px per mm of sheet) is kept in the PLY header, in case you want to convert later.
-4. **Outer silhouette.** For each height, only the leftmost and rightmost points of the contour. Internal edges (label, etc.) are left out, and isolated spikes (e.g. the sheet's edge touching the object) are discarded. Top and bottom are intentionally excluded: with the camera above the object their ellipses appear shifted in height.
-5. **Object center.** The slices assume the object sits on the axis, but it's actually a few mm off the sheet's center (~7 mm in the example photos), which distorts the projection. Since the center is fixed, the average of the left and right extremes in each frame equals `e·t`; the offset `e` is estimated by robust least squares over all frames and the object is recentered on the axis. This reduced the per-height radius dispersion from ~11 mm to 1–2 mm.
-6. **Closed turn.** Each slice is bilateral (left and right of the axis), and the view from the opposite side falls on the same plane with the silhouette mirrored. Mirroring the slices therefore adds no points: azimuths spanning A degrees close about 2·A degrees around the axis. The program measures and reports this coverage.
+1. **Angle.** The camera's azimuth around the sheet's center, derived from the pose and taken relative to the first frame, fixed at 0°. Since capture is performed with a hand-held camera, the actual angular increments are irregular, so no fixed 1° or 2° step is assumed.
+2. **Position and scale.** Each contour pixel is cast as a ray from the camera's optical center and intersected with the corresponding slice's plane. This procedure handles perspective and camera tilt simultaneously, normalizing scale: although the image's apparent scale varies with distance (nearly twofold, in the example photographs) and with height (higher points appear closer), an object of equal size yields the same size in every frame after correction.
+3. **Unit.** The resulting cloud is expressed in **reference pixels** (defined by the first frame's pixel at axis height), without direct conversion to millimeters. This is merely a constant-factor unit change — hence linear — with the conversion factor (pixels per mm of sheet) recorded in the PLY header for later conversion, if desired.
+4. **Outer silhouette.** For each height band, only the leftmost and rightmost points of the contour are considered. Internal edges (such as the label's) are discarded, as are isolated spikes (e.g., the sheet's edge touching the object). The object's top and bottom are deliberately excluded, since, with the camera positioned above the object, the corresponding ellipses appear shifted in height.
+5. **Object center.** The method assumes the object is centered on the rotation axis; however, an offset of a few millimeters from the sheet's center is observed (~7 mm in the example photographs), which distorts the projection. Since the center remains fixed, the average of the left and right extremes in each frame equals `e·t`; the offset `e` is estimated by robust least-squares regression over the set of frames, allowing the object to be recentered on the axis. This correction reduced the per-height radius dispersion from approximately 11 mm to 1–2 mm.
+6. **Angular closure.** Each slice is bilateral, that is, defined with respect to both sides of the axis, so the view from the opposite side falls on the same plane with the mirrored silhouette. Mirroring the slices therefore introduces no additional points: a span of azimuths of width A covers approximately 2·A degrees around the axis. The program computes and reports this angular coverage.
 
-In the example photos (azimuths from −86° to +80°, ~166°, not 360°): 37,860 points, coverage of **296° out of 360°** (the rest are gaps between frames) and radius from 29 to 31 mm with dispersion of 0.6 to 1.8 mm per height band, including the lower-confidence frames. The profile has a "waist" (~29 mm at 30–50 mm height) and "shoulders" (~31 mm), like the photographed pot.
+For the example photographs (azimuths from −86° to +80°, a span of ~166°, not 360°), 37,860 points were obtained, with coverage of **296° out of 360°** (the remainder corresponds to gaps between frames) and a radius between 29 and 31 mm, with dispersion of 0.6 to 1.8 mm per height band, including the lower-confidence frames. The resulting profile shows a "waist" region (~29 mm, between 30 and 50 mm in height) and "shoulders" (~31 mm), consistent with the geometry of the photographed object (a pot).
 
-**Limits.** Exact for solids of revolution (the silhouette's width is the radius), like the pot. For other shapes it's an approximation: the edge point is placed on the axis's plane, when it could be further forward or back, so flat faces get "puffed up" and concave parts disappear. The general method is the *visual hull* (intersection of extruded silhouettes). The object needs to be approximately over the sheet's center (the fixed offset is corrected, but not an object that moves).
+**Limitations.** The method is exact for solids of revolution, for which the silhouette's width corresponds directly to the radius, as in the example pot. For other geometries, it is an approximation: the edge point is placed on the axis's plane, when it could in fact be displaced forward or backward, causing flat faces to appear "inflated" and concave regions to go uncaptured. The underlying general method is the ***visual hull*** (intersection of silhouettes extruded along the line of sight). Additionally, the object must remain approximately centered on the sheet: the fixed offset is corrected by the algorithm, but displacements of the object during capture are not.
 
 <p align="center">
   <img src="docs/img/gui-nuvem.png" width="48%" alt="Point cloud from slices, perspective view">
   <img src="docs/img/gui-nuvem-topo.png" width="48%" alt="Point cloud from slices, top view">
 </p>
-<p align="center"><em>Actual output (example photos): perspective and top view. The two gaps in the ring are the angles with no frames.</em></p>
+<p align="center"><em>Actual system output (example photographs), in perspective and top views. The observed gaps correspond to angular intervals with no matching frames.</em></p>
 
-The examples below show the **kind of result being aimed for** (a real object, its point cloud and mesh); these were generated by other methods:
+The figures below illustrate the kind of result being aimed for — a real object, its point cloud and the corresponding mesh — obtained through other methods, for reference purposes:
 
 <p align="center"><img src="docs/img/nuvem-de-pontos.jpg" width="30%" alt="Example point cloud"></p>
 <p align="center"><img src="docs/img/objeto-nuvem-de-pontos-modelo-3d.png" width="60%" alt="Real object, point cloud and mesh"></p>
 
 ## Frames with 3 markers
 
-The 4 markers don't always show up: one may end up behind the object, out of frame, or blurred. Instead of discarding these frames, the program tries to **recover the pose with 3** and flags it as **lower confidence**. Frames without 3 usable markers are skipped, with the reason logged and written to `skipped.txt`.
+The four markers are not always simultaneously visible: one of them may be occluded by the object, out of frame, or blurred. Rather than discarding such frames, the system attempts to recover the pose from **three markers**, flagging it with a reduced-confidence label. Frames without at least three usable markers are discarded, with the corresponding reason logged and written to `skipped.txt`.
 
-With 3 points there are two ambiguities: which marker of the type that appears only once it is (the "0" or the "1"), and P3P returns up to 4 solutions. The program tests every hypothesis and keeps the pose closest to a **neighboring frame with 4 markers**, discarding physically impossible poses (camera below the sheet). Implementation details in [`PoseEstimator.estimateFromThree`](src/main/java/scan3d/PoseEstimator.java) and [`Pipeline`](src/main/java/scan3d/Pipeline.java):
+Using only three points introduces two sources of ambiguity: the identity ("0" or "1") of the marker belonging to the type that appears only once, and the multiplicity of solutions to the P3P (*Perspective-3-Point*) problem, which may return up to four distinct solutions. The system exhaustively tests every hypothesis and selects the pose closest to that of a **neighboring frame with four markers**, discarding physically invalid solutions (camera positioned below the sheet's plane). Implementation details are provided in [`PoseEstimator.estimateFromThree`](src/main/java/scan3d/PoseEstimator.java) and [`Pipeline`](src/main/java/scan3d/Pipeline.java):
 
-- The reference must be within `--max-gap` frames (default 3). The pose is only accepted if it's within 60 mm per frame of distance and 30° from the reference.
-- Already-resolved 3-marker frames serve as references for the following ones, in layers, up to 8 hops. Each pose comes from an independent P3P (the reference only breaks ties), so error doesn't accumulate.
-- There's no reprojection error with 3 points (the fit is exact), so that column stays empty; what exists is the distance to the reference.
-- The pose (not the detection) is what defines where the object can be in the image: the object's contour is only valid inside the volume over the markers' rectangle reprojected with it, which also works when a marker is hidden.
+- The reference frame used must be within `--max-gap` frames (default: 3). The pose is accepted only if it does not exceed 60 mm per frame of distance and 30° of angular difference relative to the reference.
+- Already-resolved three-marker frames may serve as references for subsequent frames, in successive layers, up to a limit of 8 hops. Since each pose derives from an independent P3P solution — the reference acting only as a tie-breaking criterion — error does not accumulate along the chain.
+- No reprojection error is associated with three-point solutions, since the fit is exact; in this case, the corresponding column is left empty, being replaced by the distance to the reference.
+- It is the pose, not the detection itself, that determines the image region where the object may be located: the object's contour is considered valid only within the volume bounded by the markers' rectangle reprojected under that pose, which remains valid even when one marker is occluded.
 
-A simpler heuristic (deciding the marker's identity from geometry alone) only got 71% right, hence the hypothesis testing.
+A simpler heuristic, based solely on geometric criteria to determine marker identity, achieved a success rate of only 71%, which motivated the adoption of the hypothesis-testing procedure described above.
 
-Result over the 129 example photos: **72 frames with 4 markers + 44 with 3 = 116 used (90%)**, versus 72 (56%) without this step. Among the 44, the difference to the reference is 20 mm (median), 56 mm (p90) and 132 mm (max). To use only complete frames, pass `--min-markers 4`.
+Over the 129 example photographs, 72 frames with four markers and 44 with three were obtained, totaling **116 frames used (90%)**, versus 72 (56%) without this recovery step. Among the 44 recovered frames, the difference relative to the reference is 20 mm (median), 56 mm (90th percentile) and 132 mm (maximum). To restrict processing to complete frames only, the `--min-markers 4` option should be used.
 
-In the outputs, confidence appears as the `markers`/`confidence` column in `poses.csv`, the `markers` property in `cloud.ply`, and is highlighted in **orange** with a warning in the photo and in the GUI.
+In the system's outputs, confidence level is recorded in the `markers`/`confidence` column of `poses.csv` and in the `markers` property of `cloud.ply`, being highlighted in **orange**, with a corresponding warning, both in the annotated photograph and in the graphical interface.
 
 ## Graphical interface
 
@@ -227,32 +227,32 @@ In the outputs, confidence appears as the `markers`/`confidence` column in `pose
 
 <p align="center"><img src="docs/img/gui-processamento.png" width="85%" alt="Processing tab: processing log and summary"></p>
 
-- **Process images**: runs the pipeline in the background, showing the current phase, a progress bar and the log of skipped frames. If the output folder already has a result, it asks for confirmation before overwriting. When it finishes, it loads the result.
-- **View**: enabled when the output folder already has a `cloud.ply` (e.g. from a previous run); opens the cloud, frames and contours without reprocessing.
-- **Open output folder**: opens the folder in Finder.
-- Options: photo folder, output folder, approximate camera or camera file, and whether to accept frames with 3 markers.
+- **Process images**: runs the pipeline in the background, showing the current phase, a progress bar and the log of skipped frames. If the output folder already contains results, it asks for confirmation before overwriting them; upon completion, it automatically loads the obtained result.
+- **View**: enabled when the output folder already contains a `cloud.ply` file (e.g., from a previous run); allows opening the cloud, frames and contours without reprocessing.
+- **Open output folder**: opens the corresponding folder in Finder.
+- Available options: photo source folder, output folder, use of an approximate camera or a calibration file, and acceptance (or not) of frames with three markers.
 
-The **Point cloud** tab is a custom JavaFX viewer (no OpenGL): it projects the points with perspective onto a pixel buffer with a z-buffer. Dragging rotates, Shift/right-click pans, the wheel zooms, and double-click resets. You can color by height, by frame (turn order) or by pose confidence, hide 3-marker points, hide the 1% most extreme points, and change the point size.
+The **Point cloud** tab consists of a custom viewer, implemented in JavaFX without OpenGL, which projects points in perspective onto a pixel buffer with depth testing (*z-buffer*). Interaction includes rotation by mouse drag, panning via Shift or right-click, zoom via the mouse wheel, and reset via double-click. Points can be colored by height, by frame (capture order along the turn) or by pose confidence; additionally, points from three-marker frames can be hidden, the 1% most extreme points filtered out, and the point display size adjusted.
 
 <p align="center"><img src="docs/img/gui-nuvem.png" width="85%" alt="Point cloud tab"></p>
 
-The **Frames** tab lists every photo (green = 4 markers, orange = 3, red = skipped) and shows the annotated photo and the reason. For frames with a pose, the annotation shows the markers, the frame and the axes (discarded shapes appear in gray); for skipped ones, it shows every detected shape (triangles `T` in magenta, squares `S` in yellow), to see what the detector saw.
+The **Frames** tab presents the complete list of photographs (green: four markers; orange: three markers; red: discarded frame), displaying the annotated image and the reason for discarding, when applicable. For frames with an estimated pose, the annotation includes the markers, the model's frame and the coordinate axes (discarded shapes are shown in gray); for discarded frames, every detected shape is shown (triangles in magenta, labeled `T`; squares in yellow, labeled `S`), allowing verification of what the detector identified.
 
 <p align="center"><img src="docs/img/gui-quadros.png" width="85%" alt="Frames tab"></p>
 
-The **Contours** tab lists the frames that have a contour (the number next to it is the pixel count) and shows the object's contour **over the photo** (in red, with the photo darkened) or **just the contour**, in black and white, as written to `output/contours`. It's useful to check whether the contour is over the object and see what got included along with it, like the sheet's back edge and label details. You can filter by pose confidence (4 or 3 markers).
+The **Contours** tab lists the frames for which a contour was extracted (the number displayed next to it indicates the pixel count) and allows visualizing the object's contour overlaid on the photograph (in red, with the image darkened) or in isolation, in black and white, as written to `output/contours`. This view makes it possible to verify the correspondence between the contour and the object, as well as to identify elements improperly included, such as the sheet's back edge and label details.
 
 <p align="center"><img src="docs/img/gui-contornos.png" width="85%" alt="Contours tab: pot contour over the photo"></p>
 
 Notes:
 
-- The displayed cloud is the slice-based one (see above). The shown axes and units are in reference pixels; the PLY header, shown at the bottom of the window, carries the scale.
-- Since JavaFX ships native libraries per system, the jar generated by `mvn package` only works on the system it was built on.
-- Window test modes, used to generate the screenshots above: `--load` (opens already with results), `--process` (triggers the same path as the button) and `--screenshot FILE --tab N` (saves the screenshot and closes; tabs: 0 Processing, 1 Cloud, 2 Frames, 3 Contours).
+- The displayed cloud corresponds to the slice-based method. The axes and units shown are in reference pixels; the scale factor is recorded in the PLY file header, displayed at the bottom of the window.
+- Because JavaFX includes native libraries specific to each operating system, the jar file generated by `mvn package` is executable only on the system on which it was built.
+- The window provides test modes, used to generate the screenshots presented in this document: `--load` (starts the application already loaded with results), `--process` (triggers the same procedure as the processing button) and `--screenshot FILE --tab N` (captures the screenshot and closes the application; tabs: 0 – Processing, 1 – Cloud, 2 – Frames, 3 – Contours).
 
-## What works and what doesn't
+## Results and limitations
 
-Result of `./scan3d.sh scan --approx-camera` over the 129 photos in `in/`:
+Results obtained by running `./scan3d.sh scan --approx-camera` over the set of 129 photographs in `in/`:
 
 | Step | Status |
 | --- | --- |
@@ -263,15 +263,15 @@ Result of `./scan3d.sh scan --approx-camera` over the 129 photos in `in/`:
 | Object contour | ✅ present in all 116 frames, continuous in most (median of ~1.4k pixels); ⚠️ includes the sheet's back edge and label details in some frames |
 | Point cloud | ✅ 37,860 points with the pot's shape, stable radius (dispersion of 0.6 to 1.8 mm), coverage of 296° out of 360°; ⚠️ approximation for non-revolution objects |
 | 360° turn | ✅ the pose's `rz` angle covers −179° to +180° |
-| Graphical interface and viewer | ✅ process, view, navigate frames (tested via screenshots; the user's button clicks were not exercised by me) |
+| Graphical interface and viewer | ✅ process, view, navigate frames (tested via screenshots; direct user interaction with the buttons was not exercised by the author) |
 
 Limitations and points of attention:
 
-- Use `--approx-camera` on the example photos and recalibrate for practical tests.
-- **Lens distortion is ignored** (`distCoeffs` = 0). `calibrate` prints the coefficients, but the pipeline doesn't use them yet.
-- **The slice-based cloud is exact only for solids of revolution.** For other shapes, the edge point is placed on the axis's plane, so flat faces get "puffed up" and concave parts disappear. The general method is the *visual hull*.
-- **Cloud quality depends on `K`.** With `TextMatrix.txt` the pose comes out imprecise; the example photos were processed with the approximate camera. Recalibrate before practical tests.
-- Failures are expected: the program skips frames it can't process and continues with the rest.
+- Use of `--approx-camera` is recommended for the example photographs; recalibration is required for practical testing.
+- **Lens distortion is not taken into account** (`distCoeffs` = 0). The `calibrate` command computes and prints the corresponding coefficients, but the pipeline does not yet incorporate them into processing.
+- **The slice-based cloud is exact only for solids of revolution.** For other geometries, the edge point is placed on the axis's plane, causing flat faces to appear inflated and concave regions to go unrepresented. The corresponding general method is the *visual hull*.
+- **The resulting cloud's quality depends directly on the accuracy of `K`.** With the original `TextMatrix.txt` file, the estimated pose shows considerable inaccuracy; the example photographs were processed with an approximate camera. Recalibration is recommended prior to practical testing.
+- Occasional failures are expected: the system discards frames it cannot process correctly and proceeds with the remaining ones.
 
 ## Repository structure
 
@@ -285,12 +285,12 @@ Limitations and points of attention:
 | [`in/800x480 com objeto`](in/800x480%20com%20objeto) | 129 test photos (JPG 800×480) of a pot on the sheet |
 | [`out/`](out) | 10 historical outputs (`*.matMask.jpg`), the best frames from the start of the sequence. **Not** the current program's output |
 | `output/` | Current program's output (git-ignored): `annotated/`, `contours/`, `poses.csv`, `cloud.ply`, `skipped.txt` |
-| [`docs/img`](docs/img) | Figures used in this README |
+| [`docs/img`](docs/img) | Figures used in this document |
 | [`TextMatrix.txt`](TextMatrix.txt) | Original intrinsic matrix (9 values, calibrated at another resolution) |
 | [`lib/`](lib) | Legacy: `opencv-2413.jar` and Linux `.so` files from OpenCV 2.4. **No longer used** |
 | [`install-linux.md`](install-linux.md) | Historical step-by-step (Ubuntu 16.04, Eclipse Luna, OpenCV 2.4) |
 
-## How to run
+## Installation and execution
 
 ### Installation on macOS
 
@@ -298,15 +298,15 @@ Limitations and points of attention:
 brew install openjdk@21 maven
 ```
 
-OpenCV **doesn't need to be installed**: the `org.openpnp:opencv` Maven package brings the native library (including for macOS ARM64) and the program extracts it on its own. Homebrew's JDK 21 is *keg-only*, so `scan3d.sh` already locates it; to use it from the terminal:
+Installing OpenCV **is not required**: the `org.openpnp:opencv` Maven package includes the corresponding native library (including for macOS ARM64), which the program extracts automatically. Since Homebrew's JDK 21 is *keg-only*, `scan3d.sh` already locates it automatically; to use it directly from the terminal:
 
 ```bash
 echo 'export JAVA_HOME=/opt/homebrew/opt/openjdk@21' >> ~/.zshrc
 ```
 
-Nothing was automatically changed in `~/.zshrc`.
+No automatic changes are made to `~/.zshrc`.
 
-### Run
+### Execution
 
 ```bash
 ./scan3d.sh gui                           # window: Process images / View
@@ -317,7 +317,7 @@ Nothing was automatically changed in `~/.zshrc`.
 ./scan3d.sh --help
 ```
 
-The first `scan3d.sh` run builds the project (downloads dependencies and generates a ~120 MB jar, since it embeds OpenCV's native libraries for every system and JavaFX's for the current one). `scan` options: `--in`, `--out`, `--camera`, `--approx-camera`, `--limit N`, `--min-markers 3|4` (default 3) and `--max-gap N` (default 3). Output:
+On the first run, `scan3d.sh` builds the project (downloading dependencies and generating a jar of approximately 120 MB, since it embeds OpenCV's native libraries for every supported system and JavaFX's for the current one). The options available for the `scan` command are: `--in`, `--out`, `--camera`, `--approx-camera`, `--limit N`, `--min-markers 3|4` (default 3) and `--max-gap N` (default 3). The generated output files are:
 
 | File | Contents |
 | --- | --- |
@@ -327,20 +327,20 @@ The first `scan3d.sh` run builds the project (downloads dependencies and generat
 | `output/cloud.ply` | accumulated cloud, with the `frame` and `markers` properties |
 | `output/skipped.txt` | one skipped frame per line, with the reason |
 
-### For practical tests
+### Recommendations for practical testing
 
-1. Photograph a printed **checkerboard** (e.g. 8×6 inner corners, 50 mm squares) in 15 or more positions, **at the same resolution** you'll use for the object, and run `calibrate`.
-2. Print the template ([`docs/img/A4-base-scan3D.png`](docs/img/A4-base-scan3D.png)) on A4 **without scaling/page fitting** and check with a ruler that the markers' centers are 187 × 161 mm apart; if it differs, change `WIDTH_MM`/`HEIGHT_MM` in [`PoseEstimator`](src/main/java/scan3d/PoseEstimator.java).
-3. Whenever possible, keep **all four markers visible** in each photo and the object at the center, without covering any of them. Frames with 3 still work (lower confidence), but with fewer than that the frame is skipped. For the chaining to work, photograph in sequence with the camera moving little between photos (here, ~6 mm per frame).
-4. Use diffuse light: shadows and reflections break up contours.
+1. Photograph a printed **checkerboard** (e.g., 8×6 inner corners, 50 mm squares) in 15 or more distinct positions, **at the same resolution** to be used for capturing the object, and run the `calibrate` command.
+2. Print the template ([`docs/img/A4-base-scan3D.png`](docs/img/A4-base-scan3D.png)) on A4 paper, **without scaling or automatic page fitting**, and verify with a ruler that the distance between the markers' centers is 187 × 161 mm; if it differs, adjust the `WIDTH_MM`/`HEIGHT_MM` constants in [`PoseEstimator`](src/main/java/scan3d/PoseEstimator.java).
+3. Whenever possible, keep **all four markers visible** in each photograph, with the object centered and none of the markers obstructed. Frames with only three markers remain usable (reduced confidence), while frames with fewer than that are discarded. For the frame-chaining procedure to work properly, photograph in sequence with small camera displacements between captures (approximately 6 mm per frame, in the example set).
+4. Use diffuse lighting: shadows and reflections compromise contour extraction.
 
-## Next steps
+## Future work
 
-In order of effort-to-return:
+Ordered by estimated ratio of implementation effort to expected return:
 
-1. **Recalibrate** at the real resolution and pass `distCoeffs` to `solvePnP` and to the inversion.
-2. **Visual hull** (intersection of extruded silhouettes) for non-revolution objects; the slice method puffs up flat faces and loses concavities. Needs a filled silhouette (item 3).
-3. **Segment the object against the white paper** (threshold/GrabCut inside the reprojected region) to get a **filled** silhouette, needed for the *visual hull* and to avoid the sheet-edge lines that still leak into the current contour.
-4. **Extra shapes with 1 triangle or 1 square** (2 frames today): the distance ratio doesn't exist; another criterion would be needed, such as the reprojection error of each combination.
-5. Filter/weight points from lower-confidence frames in the reconstruction and measure the effect with real photos.
-6. Port to Android (OpenCV Android + the same logic), after validating the math.
+1. **Recalibration** at the camera's actual resolution and incorporation of the distortion coefficients (`distCoeffs`) into `solvePnP` and the ray-inversion step.
+2. **Visual hull** (intersection of extruded silhouettes) for objects that are not solids of revolution, since the slice-based method inflates flat faces and fails to capture concavities. Depends on obtaining filled silhouettes (item 3).
+3. **Object segmentation** against the sheet's white background (via thresholding or GrabCut, within the reprojected region), so as to obtain a **filled** silhouette — a prerequisite for the *visual hull* — free of the sheet-edge lines still present in the current contour.
+4. **Handling frames with excess shapes** in the presence of only one triangle or one square (2 frames in the current set): in these cases, the distance-ratio criterion is undefined, requiring an alternative criterion, such as the reprojection error of each possible combination.
+5. Filtering or weighting points from lower-confidence frames during reconstruction, with evaluation of the corresponding effect on real photographs.
+6. Porting to Android (OpenCV Android, retaining the same processing logic), to be carried out after full validation of the underlying mathematics.

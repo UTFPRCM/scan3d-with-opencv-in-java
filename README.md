@@ -1,54 +1,54 @@
-# Reconstrução 3D com OpenCV
+# Reconstrução Tridimensional com OpenCV
 
-Protótipo para **reconstruir objetos em 3D a partir de fotos tiradas ao redor deles**, usando apenas uma câmera comum e uma folha A4 impressa com um marcador de referência. A primeira versão foi feita em Java com OpenCV 2.4, porém, atualizado para OpenCV 4.9.
+Este trabalho apresenta um protótipo para a reconstrução tridimensional de objetos a partir de um conjunto de fotografias capturadas ao seu redor, utilizando apenas uma câmera convencional e uma folha A4 impressa com um marcador de referência espacial. A implementação original foi desenvolvida em Java com a biblioteca OpenCV 2.4 e, posteriormente, portada para a versão 4.9.
 
 <p align="center">
   <img src="docs/img/resultado-pose-frente.jpg" width="48%" alt="Saída: marcadores, IDs, moldura do modelo e eixos da pose (vista frontal)">
   <img src="docs/img/resultado-pose-tras.jpg" width="48%" alt="Saída: o mesmo, visto do lado oposto da volta">
 </p>
-<p align="center"><em>Aqui são apresentadas duas imagens com aproximadamente 180° de diferença: T0/S0/T1/S1 são os marcadores identificados, o retângulo verde é o modelo reprojetado com a pose estimada e os eixos: X (vermelho), Y (verde) e Z (azul).</em></p>
+<p align="center"><em>Par de imagens com aproximadamente 180° de diferença angular entre si. T0/S0/T1/S1 identificam os marcadores detectados; o retângulo verde corresponde ao modelo reprojetado a partir da pose estimada; os eixos X (vermelho), Y (verde) e Z (azul) indicam o sistema de coordenadas do marcador.</em></p>
 
 <p align="center"><img src="docs/img/gui-nuvem.png" width="80%" alt="Nuvem de pontos por lâminas, vista em perspectiva"></p>
 
-> Como pode ser observado na imagem acima, a interface gráfica é composta pelos botões principais: “Processar imagens” e “Visualizar”, além de opções para análise dos resultados. A nuvem de pontos é montada por **lâminas** (cada contorno vira um plano vertical girado pelo ângulo da câmera) e com raio estável (dispersão de ~1 a 2 mm). É exata para objetos de revolução e **aproximada** para os demais. Veja [O que funciona e o que não funciona](#o-que-funciona-e-o-que-não-funciona).
+> Conforme ilustrado na imagem acima, a interface gráfica reúne os controles principais — “Processar imagens” e “Visualizar” — além de recursos para análise dos resultados. A nuvem de pontos é construída por **lâminas** (cada contorno é convertido em um plano vertical rotacionado segundo o ângulo estimado da câmera), resultando em um raio estável (dispersão de aproximadamente 1 a 2 mm). O método é exato para objetos de revolução e aproximado para os demais casos. Ver [Resultados e limitações](#resultados-e-limitações).
 
 ## Sumário
 
-1. [A ideia](#a-ideia)
-2. [O marcador](#o-marcador)
-3. [Fluxograma dos processos](#fluxograma-dos-processos)
+1. [Visão geral](#visão-geral)
+2. [O marcador de referência](#o-marcador-de-referência)
+3. [Fluxograma do processo](#fluxograma-do-processo)
 4. [Fundamentos: câmera, calibração e pose](#fundamentos-câmera-calibração-e-pose)
 5. [Da silhueta à nuvem 3D (lâminas)](#da-silhueta-à-nuvem-3d-lâminas)
 6. [Quadros com 3 marcadores](#quadros-com-3-marcadores)
 7. [Interface gráfica](#interface-gráfica)
-8. [O que funciona e o que não funciona](#o-que-funciona-e-o-que-não-funciona)
+8. [Resultados e limitações](#resultados-e-limitações)
 9. [Estrutura do repositório](#estrutura-do-repositório)
-10. [Como executar](#como-executar)
-11. [Próximos passos](#próximos-passos)
+10. [Instalação e execução](#instalação-e-execução)
+11. [Trabalhos futuros](#trabalhos-futuros)
 
-## A ideia
+## Visão geral
 
-Um objeto é colocado no centro de uma folha A4. A câmera dá uma volta de **360°** ao redor dele, capturando um quadro a cada poucos graus. Em cada quadro:
+O objeto de interesse é posicionado no centro de uma folha A4. A câmera realiza um percurso de aproximadamente **360°** ao seu redor, capturando um quadro a intervalos de poucos graus. Para cada quadro, o método executa as seguintes etapas:
 
-1. o **marcador** impresso na folha revela onde a câmera está e para onde aponta (a *pose*);
-2. o **contorno do objeto** é isolado;
-3. cada pixel do contorno, sabendo a pose, é convertido em coordenadas reais (mm);
-4. os pontos de todos os quadros, juntos, formariam uma **nuvem de pontos 3D**.
+1. o **marcador** impresso na folha determina a posição e a orientação da câmera (a *pose*);
+2. o **contorno do objeto** é isolado na imagem;
+3. cada pixel do contorno, conhecida a pose, é convertido em coordenadas do mundo real (mm);
+4. o conjunto de pontos de todos os quadros compõe a **nuvem de pontos tridimensional**.
 
-Na taxonomia de técnicas de aquisição 3D, isto é uma técnica **óptica passiva** (uma câmera, sem projetar luz) e, na prática, uma variação de *Shape from Silhouette* ([Temporal Shape-From-Silhouette](https://www.cs.cmu.edu/~german/research/TSFS/tsfs.html)): o modelo vem dos contornos vistos de vários ângulos.
+Segundo a taxonomia de técnicas de aquisição 3D, trata-se de uma técnica **óptica passiva** (câmera única, sem projeção de luz estruturada), correspondendo, na prática, a uma variação do método *Shape from Silhouette* ([Temporal Shape-From-Silhouette](https://www.cs.cmu.edu/~german/research/TSFS/tsfs.html)). O modelo geométrico é obtido a partir dos contornos observados sob múltiplos ângulos de vista.
 
 <p align="center"><img src="docs/img/tecnicas-reconstrucao-3d.png" width="60%" alt="Árvore de técnicas ópticas de aquisição 3D"></p>
 
-## O marcador
+## O marcador de referência
 
-O marcador são **2 triângulos e 2 quadrados pretos (≈ 2 × 2 cm)** nos cantos de uma folha A4 em paisagem, com o objeto no centro. O gabarito usado está em [`docs/img/A4-base-scan3D.png`](docs/img/A4-base-scan3D.png) (3508×2480 px = A4 a 300 dpi); o diagrama polar de 0° a 360° no meio serve de referência para o ângulo de cada foto.
+O marcador é composto por **dois triângulos e dois quadrados pretos (≈ 2 × 2 cm)** posicionados nos cantos de uma folha A4 em orientação paisagem, com o objeto disposto no centro. O gabarito utilizado está disponível em [`docs/img/A4-base-scan3D.png`](docs/img/A4-base-scan3D.png) (3508×2480 px, equivalente a A4 a 300 dpi); o diagrama polar de 0° a 360°, inserido ao centro, serve de referência para o ângulo de captura de cada fotografia.
 
 <p align="center">
   <img src="docs/img/imagem-base-referencia-coordenada.png" width="48%" alt="Gabarito do marcador">
   <img src="docs/img/imagem-base-padrao.jpg" width="48%" alt="Marcador detectado numa foto, com IDs">
 </p>
 
-Os quatro centros são os pontos de correspondência 3D↔2D do `solvePnP`. O código assume o plano da folha como `Z = 0`, com os triângulos na coluna esquerda e os quadrados na direita:
+Os quatro centroides constituem os pontos de correspondência 3D↔2D utilizados pela função `solvePnP`. Assume-se o plano da folha como `Z = 0`, com os triângulos dispostos na coluna esquerda e os quadrados na direita:
 
 ```text
    tri0 (0, 0)      ────── 187 mm ──────   sq0 (187, 0)
@@ -58,9 +58,9 @@ Os quatro centros são os pontos de correspondência 3D↔2D do `solvePnP`. O c�
    tri1 (0, 161)    ────── 187 mm ──────   sq1 (187, 161)
 ```
 
-As medidas sobre o gabarito (A4 = 297 × 210 mm): usando o centroide dos triângulos, o espaçamento horizontal dá ≈ 185 mm e o vertical ≈ 160 mm, coerente com os 187 × 161 mm do modelo. (O centro do círculo mínimo, cai no meio da hipotenusa e daria ≈ 178 mm.)
+As medições realizadas sobre o gabarito (folha A4, 297 × 210 mm) indicam, a partir do centroide dos triângulos, um espaçamento horizontal de aproximadamente 185 mm e vertical de 160 mm, valores coerentes com os 187 × 161 mm adotados no modelo. O centro do círculo circunscrito mínimo, por sua vez, recai no ponto médio da hipotenusa, resultando em uma distância aproximada de 178 mm.
 
-## Fluxograma dos processos:
+## Fluxograma do processo
 
 ```mermaid
 flowchart TD
@@ -92,14 +92,14 @@ flowchart TD
 | Calibração | `findChessboardCorners` → `calibrateCamera` | [`Calibrator`](src/main/java/scan3d/Calibrator.java) |
 
 <p align="center"><img src="docs/img/escala-de-cinza-contornos.png" width="80%" alt="Cor → cinza → bordas"></p>
-<p align="center"><em>Ilustração genérica da sequência cor → cinza → bordas (figura de referência, não é saída do projeto).</em></p>
+<p align="center"><em>Ilustração esquemática da sequência cor → tons de cinza → detecção de bordas (figura ilustrativa; não constitui saída real do sistema).</em></p>
 
-**Detecção do marcador.** A ordem `tri0, sq0, tri1, sq1` não vem mais da enumeração dos contornos. Em uma volta de 360° o marcador aparece em qualquer rotação (na metade da volta os quadrados ficam à esquerda), então o código usa a orientação: como a câmera vê a folha de cima, o produto vetorial entre o eixo triângulo→quadrado e o eixo entre as duas formas iguais tem sinal fixo, o que identifica qual é a "0" e qual é a "1". Quadros com 4 marcadores dão a pose de melhor qualidade. Com 3, a pose é recuperada por outro caminho (próxima seção); com menos, o quadro é **ignorado**, não adivinhado.
+**Detecção do marcador.** A determinação da sequência `tri0, sq0, tri1, sq1` não depende mais da ordem de enumeração dos contornos. Como o marcador pode aparecer em qualquer rotação ao longo de uma volta de 360° (na metade do percurso os quadrados aparecem à esquerda), o algoritmo utiliza um critério de orientação: como a câmera observa a folha de cima, o produto vetorial entre o eixo triângulo→quadrado e o eixo entre as duas formas de mesmo tipo apresenta sinal constante, permitindo identificar univocamente qual conjunto corresponde a "0" e qual corresponde a "1". Quadros com os quatro marcadores fornecem a estimativa de pose de maior qualidade; com três marcadores, a pose é recuperada por um procedimento alternativo (ver seção seguinte); com menos de três, o quadro é **descartado**.
 
-**A "máscara" é um contorno, não uma região preenchida.** [`ObjectContour`](src/main/java/scan3d/ObjectContour.java) usa outra imagem de bordas que a dos marcadores: `Canny` direto do cinza (limiares 20 e 100) com dilatação 2×2, como no código que gerou o `out/`. As bordas do Example02 (`adaptiveThreshold` antes do `Canny`) servem para achar os marcadores, mas fragmentavam o contorno do objeto. Depois, o objeto fica em pé dentro do retângulo dos marcadores, então o retângulo (encolhido 25 mm para excluir os marcadores e esticado 250 mm para cima) é reprojetado com a pose do quadro e só as bordas dentro dele valem. Isso tira o fundo, os marcadores e as linhas da borda da folha que se ligavam ao pote. Entre as bordas restantes, fica o componente de maior caixa envolvente e uma banda fina em volta dele. **Limites:** o objeto precisa caber no retângulo dos marcadores e ter até 250 mm de altura, e a **borda de trás da folha** ainda aparece em alguns quadros, atrás do objeto (cai dentro da região pela mesma linha de visada).
+A extração do contorno do objeto, implementada em [`ObjectContour`](src/main/java/scan3d/ObjectContour.java), utiliza uma imagem de bordas distinta daquela empregada na detecção dos marcadores: aplica-se o operador de Canny diretamente sobre a imagem em tons de cinza (limiares 20 e 100), seguido de dilatação morfológica 2×2. A etapa de `adaptiveThreshold` que precede o `Canny` na detecção de marcadores é adequada a essa finalidade, mas fragmenta o contorno do objeto quando aplicada da mesma forma. Delimita-se, então, uma região de interesse correspondente à área interna aos pontos de referência, o que elimina o fundo da cena, os próprios marcadores e as linhas de borda da folha. Entre os contornos remanescentes, seleciona-se o componente de maior extensão, acrescido de uma faixa estreita ao seu redor. **Limitações:** o objeto deve caber no retângulo definido pelos marcadores e não exceder 250 mm de altura; adicionalmente, a **borda posterior da folha** ainda é capturada em alguns quadros, por situar-se na mesma linha de visada do objeto.
 
 <p align="center"><img src="docs/img/mascara.png" width="70%" alt="Conceito de máscara: imagem, máscara, resultado"></p>
-<p align="center"><em>Conceito de máscara (imagem genérica; a saída real é a silhueta fina em <code>output/contours</code>).</em></p>
+<p align="center"><em>Representação esquemática do conceito de máscara (imagem ilustrativa; a saída real do sistema corresponde à silhueta fina em <code>output/contours</code>).</em></p>
 
 ## Fundamentos: câmera, calibração e pose
 
@@ -110,7 +110,7 @@ flowchart TD
   <img src="docs/img/triangulacao.png" width="55%" alt="Projeção de um ponto 3D no plano da imagem">
 </p>
 
-Um ponto 3D `(X, Y, Z)` projeta-se no pixel `(u, v)` por:
+A projeção de um ponto tridimensional `(X, Y, Z)` sobre o pixel `(u, v)` é modelada pela câmera pinhole segundo a equação:
 
 ```text
 s · [u v 1]ᵀ = K · [R | t] · [X Y Z 1]ᵀ
@@ -122,19 +122,19 @@ s · [u v 1]ᵀ = K · [R | t] · [X Y Z 1]ᵀ
     [R | t]                 extrínsecos: dependem da posição da câmera em cada foto
 ```
 
-- `fx, fy`: distância focal em **pixels**; `(cx, cy)`: ponto principal (em geral o centro da imagem).
-- Se a imagem for redimensionada, `fx, fy, cx, cy` mudam na mesma proporção.
+- `fx, fy` correspondem à distância focal expressa em **pixels**; `(cx, cy)` denota o ponto principal, geralmente coincidente com o centro da imagem.
+- O redimensionamento da imagem altera `fx, fy, cx, cy` na mesma proporção.
 
 <p align="center">
   <img src="docs/img/distancia-focal.jpg" width="40%" alt="Distância focal">
   <img src="docs/img/distancia-focal-sensor-lente.jpg" width="40%" alt="Distância focal, sensor e lente">
 </p>
 
-Pela semelhança de triângulos, com `P` a largura em pixels, `W` a largura real e `D` a distância, vale `F = (P · D) / W`. Serve para estimar uma distância isolada, mas **não substitui o `solvePnP`**, que usa vários pontos e devolve a pose completa.
+Por semelhança de triângulos, sendo `P` a largura em pixels, `W` a largura real do objeto e `D` a distância até a câmera, obtém-se `F = (P · D) / W`. Essa relação permite estimar uma distância isolada, mas **não substitui a função `solvePnP`**, que utiliza múltiplos pontos de correspondência e retorna a pose completa da câmera.
 
 ### Intrínsecos: `TextMatrix.txt`
 
-Os valores vêm de uma calibração feita em 2017 (tabuleiro 8×6, quadrados de 50 mm, `CALIB_FIX_PRINCIPAL_POINT`). O código original só imprimia a matriz e os números foram copiados à mão para a única linha do arquivo. Ele foi portado para o comando `calibrate` (veja [Como executar](#como-executar)), que agora grava o arquivo sozinho e, no formato de 11 valores, guarda também a resolução da calibração:
+Os valores da matriz intrínseca provêm de uma calibração realizada em 2017. Na implementação original, o programa apenas imprimia a matriz, cujos valores eram transcritos manualmente o arquivo. Essa etapa foi automatizada por meio do comando `calibrate` (ver [Instalação e execução](#instalação-e-execução)), que atualmente grava o arquivo de forma autônoma e, no formato estendido de 11 valores, também registra a resolução utilizada na calibração:
 
 ```text
 fx, 0, cx, 0, fy, cy, 0, 0, 1
@@ -142,32 +142,32 @@ fx, 0, cx, 0, fy, cy, 0, 0, 1
 fx, 0, cx, 0, fy, cy, 0, 0, 1, largura, altura                   (novo, 11 valores)
 ```
 
-<p align="center"><img src="docs/img/A4-circles-pattern.png" width="40%" alt="Padrão de círculos assimétricos do OpenCV"></p>
-<p align="center"><em><code>A4-circles-pattern.png</code>: padrão alternativo de calibração (grade de círculos) que consta em <code>docs/img</code>; o código usa tabuleiro de xadrez.</em></p>
+<p align="center"><img src="docs/img/A4-chessboard.png" width="40%" alt="Padrão de círculos assimétricos do OpenCV"></p>
+<p align="center"><em>Padrão de calibração (chessboard) utilizado no projeto e disponível em <code>docs/img</code></em></p>
 
-> No projeto os 72 quadros em que os marcadores foram detectados: com o `TextMatrix.txt` original, o erro de reprojeção mediano é **26 px** (máximo 47 px); com uma câmera aproximada (`--approx-camera`: `f` = largura da imagem, ponto principal no centro) cai para **1,2 px**. Por isso o programa avisa quando `K` não combina com a resolução das fotos, e o passo mais importante antes dos testes práticos é recalibrar na resolução real da câmera.
+> Ao utilizar os valores atuais de `TextMatrix.txt` para processar as imagens de `/in`, o erro de reprojeção mediano é de **26 px** (máximo de 47 px), porém esse erro pode ser reduzido para **1,2 px** quando aplicado valores aproximados (`--approx-camera`: `f` igual à largura da imagem, ponto principal no centro). Por esse motivo, o programa emite um aviso quando `K` não corresponde à resolução das fotografias, sendo a recalibração na resolução real da câmera a etapa mais relevante antes da realização de testes práticos.
 
 ### Extrínsecos: `solvePnP`
 
 <p align="center"><img src="docs/img/coordenadas-real-coordenadas-pixels.png" width="65%" alt="Sistema de coordenadas do mundo, da câmera e do plano da imagem, com a equação de projeção"></p>
 
-Para cada foto, `solvePnP(objectPoints, imagePoints, K, distCoeffs)` (em [`PoseEstimator`](src/main/java/scan3d/PoseEstimator.java)) recebe:
+Para cada fotografia, a função `solvePnP(objectPoints, imagePoints, K, distCoeffs)`, implementada em [`PoseEstimator`](src/main/java/scan3d/PoseEstimator.java), recebe como parâmetros:
 
-- `objectPoints`: os 4 centros do marcador no mundo, em mm, com `Z = 0` (tabela acima);
-- `imagePoints`: os 4 centros detectados, em pixels;
-- `distCoeffs`: hoje **zeros**, ou seja, ignora a distorção da lente.
+- `objectPoints`: as coordenadas dos quatro centros do marcador no referencial do mundo, em mm, com `Z = 0` (conforme tabela anterior);
+- `imagePoints`: as coordenadas dos quatro centros detectados na imagem, em pixels;
+- `distCoeffs`: atualmente **nulo**, isto é, os efeitos de distorção da lente não são considerados.
 
-Devolve `rvec` (rotação, vetor de Rodrigues) e `tvec` (translação, mm): o **extrínseco daquele quadro**. `Calib3d.Rodrigues(rvec)` converte `rvec` em matriz `R` 3×3.
+A função retorna o vetor de rotação `rvec` (representação de Rodrigues) e o vetor de translação `tvec` (em mm), que constituem os **parâmetros extrínsecos** daquele quadro. A conversão de `rvec` para a matriz de rotação `R` (3×3) é realizada por `Calib3d.Rodrigues(rvec)`.
 
 <p align="center">
   <img src="docs/img/triangulacao-3d.png" width="48%" alt="Câmera pinhole e ponto 3D">
   <img src="docs/img/detectacao-objeto-retangular.png" width="48%" alt="Estimativa de pose e reprojeção de um modelo sobre uma caixa">
 </p>
-<p align="center"><em>Direita: exemplo de pose estimada e reprojeção. O projeto faz algo parecido em <code>output/annotated</code>, desenhando a moldura do modelo e os eixos sobre a folha.</em></p>
+<p align="center"><em>À direita, exemplo de pose estimada e respectiva reprojeção. Procedimento análogo é realizado pelo sistema em <code>output/annotated</code>, no qual a moldura do modelo e os eixos de coordenadas são sobrepostos à imagem da folha.</em></p>
 
 ### Ângulos
 
-`PoseEstimator` extrai ângulos de Euler (convenção Z-Y-X) de `R` e os grava em `poses.csv`. O ângulo de cada quadro **em volta do objeto** não é um deles: é o azimute da câmera em relação ao centro da folha, calculado a partir de `R` e `t` em [`LaminaCloudBuilder`](src/main/java/scan3d/LaminaCloudBuilder.java).
+`PoseEstimator` extrai os ângulos de Euler (convenção Z-Y-X) a partir de `R` e os registra em `poses.csv`. O ângulo de rotação de cada quadro em torno do objeto, contudo, não corresponde a nenhum desses três ângulos: trata-se do **azimute da câmera** em relação ao centro da folha, calculado a partir de `R` e `t` em [`LaminaCloudBuilder`](src/main/java/scan3d/LaminaCloudBuilder.java).
 
 <p align="center">
   <img src="docs/img/matriz-rotacao.png" width="40%" alt="Matriz de rotação">
@@ -176,46 +176,46 @@ Devolve `rvec` (rotação, vetor de Rodrigues) e `tvec` (translação, mm): o **
 
 ## Da silhueta à nuvem 3D (lâminas)
 
-A ideia: tratar o contorno de cada foto como uma **lâmina 2D em pé**, no plano vertical que passa pelo eixo de giro (Z, pelo centro da folha), e girar a lâmina pelo ângulo da câmera naquele quadro. O conjunto das lâminas forma o objeto. Implementação em [`LaminaCloudBuilder`](src/main/java/scan3d/LaminaCloudBuilder.java):
+O princípio do método consiste em tratar o contorno de cada fotografia como uma **lâmina bidimensional vertical**, situada no plano que contém o eixo de rotação (Z, passando pelo centro da folha), rotacionada segundo o ângulo estimado da câmera naquele quadro. O conjunto das lâminas compõe o objeto reconstruído. A implementação encontra-se em [`LaminaCloudBuilder`](src/main/java/scan3d/LaminaCloudBuilder.java) e compreende as seguintes etapas:
 
-1. **Ângulo.** O azimute da câmera em volta do centro da folha, tirado da pose, relativo ao primeiro quadro (que fica em 0°). Os passos reais são irregulares (câmera na mão), então não se supõe 1 ou 2° fixos.
-2. **Posição e escala.** Cada pixel do contorno é lançado como um raio a partir da câmera e **intersectado com o plano da lâmina**. Isso trata a perspectiva e a inclinação da câmera de uma vez, e normaliza o tamanho: a escala da imagem muda com a distância (nas fotos de exemplo, quase 2×) e com a altura (pontos mais altos ficam mais perto), mas um objeto do mesmo tamanho dá o mesmo tamanho em qualquer quadro.
-3. **Unidade.** A nuvem sai em **pixels de referência** (um pixel do primeiro quadro na altura do eixo), sem mm. É só uma mudança de unidade constante, então a escala é linear; o fator (px por mm da folha) fica no cabeçalho do PLY, caso queira converter depois.
-4. **Silhueta externa.** Para cada altura, só os extremos esquerdo e direito do contorno. Bordas internas (rótulo etc.) ficam de fora, e picos isolados (por exemplo, a borda da folha encostada no objeto) são descartados. O topo e a base não entram de propósito: com a câmera acima do objeto as elipses deles aparecem deslocadas em altura.
-5. **Centro do objeto.** As lâminas supõem o objeto sobre o eixo, mas ele fica alguns mm fora do centro da folha (~7 mm nas fotos de exemplo), o que deforma a projeção. Como o centro é fixo, a média dos extremos esquerdo e direito em cada quadro vale `e·t`; o deslocamento `e` é estimado por mínimos quadrados robustos sobre todos os quadros e o objeto é recentrado no eixo. Isso reduziu a dispersão do raio por altura de ~11 mm para 1 a 2 mm.
-6. **Volta fechada.** Cada lâmina é bilateral (esquerda e direita do eixo) e a vista do lado oposto cai no mesmo plano com a silhueta espelhada. Espelhar as lâminas, portanto, não acrescenta pontos: azimutes cobrindo A graus fecham cerca de 2·A graus em volta do eixo. O programa mede e informa essa cobertura.
+1. **Ângulo.** Corresponde ao azimute da câmera em torno do centro da folha, derivado da pose e tomado em relação ao primeiro quadro, fixado em 0°. Como a captura é realizada com a câmera empunhada manualmente, os incrementos angulares reais são irregulares, não sendo assumido um passo fixo de 1° ou 2°.
+2. **Posição e escala.** Cada pixel do contorno é projetado como um raio a partir do centro óptico da câmera e intersectado com o plano da lâmina correspondente. Esse procedimento trata simultaneamente a perspectiva e a inclinação da câmera, normalizando a escala: embora a escala aparente da imagem varie com a distância (quase o dobro, nas fotografias de exemplo) e com a altura (pontos mais elevados aparentam estar mais próximos), um objeto de mesmas dimensões produz o mesmo tamanho em qualquer quadro após a correção.
+3. **Unidade.** A nuvem resultante é expressa em **pixels de referência** (definidos pelo pixel do primeiro quadro na altura do eixo), sem conversão direta para milímetros. Trata-se de uma mudança de unidade de fator constante — portanto linear —, sendo o fator de conversão (pixels por mm da folha) registrado no cabeçalho do arquivo PLY para eventual conversão posterior.
+4. **Silhueta externa.** Para cada faixa de altura, consideram-se apenas os pontos extremos, esquerdo e direito, do contorno. Bordas internas (como as do rótulo) são descartadas, assim como picos isolados (por exemplo, a borda da folha em contato com o objeto). O topo e a base do objeto são deliberadamente excluídos, pois, com a câmera posicionada acima do objeto, as elipses correspondentes a essas regiões aparecem deslocadas em altura.
+5. **Centro do objeto.** O método pressupõe que o objeto esteja centrado sobre o eixo de rotação; observa-se, no entanto, um deslocamento de poucos milímetros em relação ao centro da folha (~7 mm nas fotografias de exemplo), o que introduz distorção na projeção. Como o centro permanece fixo, a média dos extremos esquerdo e direito em cada quadro equivale a `e·t`; o deslocamento `e` é estimado por regressão robusta de mínimos quadrados sobre o conjunto de quadros, permitindo recentralizar o objeto no eixo. Essa correção reduziu a dispersão do raio por faixa de altura de aproximadamente 11 mm para 1–2 mm.
+6. **Fechamento angular.** Cada lâmina é bilateral, isto é, definida em relação a ambos os lados do eixo, de modo que a vista do lado oposto recai sobre o mesmo plano com a silhueta espelhada. O espelhamento das lâminas não introduz, portanto, pontos adicionais: um intervalo de azimutes de amplitude A cobre aproximadamente 2·A graus em torno do eixo. O programa calcula e reporta essa cobertura angular.
 
-Nas fotos de exemplo (azimutes de −86° a +80°, ~166°, e não 360°): 37.860 pontos, cobertura de **296° de 360°** (o resto são lacunas entre quadros) e raio de 29 a 31 mm com dispersão de 0,6 a 1,8 mm em cada faixa de altura, incluindo os quadros de confiança menor. O perfil tem "cintura" (~29 mm a 30 a 50 mm de altura) e "ombros" (~31 mm), como o pote das fotos.
+No conjunto de fotografias de exemplo (azimutes de −86° a +80°, amplitude de ~166°, não 360°), obtiveram-se 37.860 pontos, com cobertura de **296° dos 360°** (o restante corresponde a lacunas entre quadros) e raio entre 29 e 31 mm, com dispersão de 0,6 a 1,8 mm por faixa de altura, incluindo os quadros de confiança reduzida. O perfil resultante apresenta uma região de "cintura" (~29 mm, entre 30 e 50 mm de altura) e "ombros" (~31 mm), compatível com a geometria do objeto fotografado (um pote).
 
-**Limites.** É exata para corpos de revolução (a largura da silhueta é o raio), como o pote. Para outros formatos é uma aproximação: o ponto da borda é posto no plano do eixo, quando poderia estar mais à frente ou atrás, então faces planas ficam "estufadas" e partes côncavas não aparecem. O método geral é o *visual hull* (interseção das silhuetas esticadas). O objeto precisa estar aproximadamente sobre o centro da folha (o desvio fixo é corrigido, mas não um objeto que se mova).
+**Limitações.** O método é exato para objetos de revolução, nos quais a largura da silhueta corresponde diretamente ao raio, como no caso do objeto utilizado como exemplo. Para geometrias distintas, trata-se de uma aproximação: o ponto de borda é posicionado no plano do eixo, quando na realidade poderia estar deslocado à frente ou atrás, o que faz com que faces planas apareçam "infladas" e regiões côncavas não sejam capturadas. O método geral subjacente é o ***visual hull*** (interseção de silhuetas estendidas ao longo da linha de visada). Adicionalmente, o objeto deve permanecer aproximadamente centrado sobre a folha: o desvio fixo é corrigido pelo algoritmo, mas deslocamentos do objeto durante a captura não são.
 
 <p align="center">
   <img src="docs/img/gui-nuvem.png" width="48%" alt="Nuvem de pontos por lâminas, vista em perspectiva">
   <img src="docs/img/gui-nuvem-topo.png" width="48%" alt="Nuvem de pontos por lâminas, vista de cima">
 </p>
-<p align="center"><em>Saída real (fotos de exemplo): perspectiva e vista de cima. As lacunas são os ângulos sem quadros.</em></p>
+<p align="center"><em>Saída real do sistema (fotografias de exemplo), em vista de perspectiva e vista superior. As lacunas observadas correspondem aos intervalos angulares sem quadros correspondentes.</em></p>
 
-Nos exemplos abaixo é possivel ver o **resultado que se busca** (um objeto real, sua nuvem de pontos e a malha); estes que foram gerados por outros metodos:
+As figuras a seguir ilustram o tipo de resultado almejado — um objeto real, sua nuvem de pontos e a malha correspondente —, obtidos por meio de outros métodos, a título de referência:
 
 <p align="center"><img src="docs/img/nuvem-de-pontos.jpg" width="30%" alt="Exemplo de nuvem de pontos"></p>
 <p align="center"><img src="docs/img/objeto-nuvem-de-pontos-modelo-3d.png" width="60%" alt="Objeto real, nuvem de pontos e malha"></p>
 
 ## Quadros com 3 marcadores
 
-Nem sempre os 4 marcadores aparecem: um pode ficar atrás do objeto, fora do quadro ou borrado. Em vez de descartar esses quadros, o programa tenta **recuperar a pose com 3** e a marca como **confiança menor**. Quadros sem 3 marcadores utilizáveis são ignorados, com o motivo no log e em `skipped.txt`.
+Nem sempre os quatro marcadores são visíveis simultaneamente: um deles pode estar oculto pelo objeto, fora do enquadramento ou desfocado. Em vez de descartar tais quadros, o sistema procura recuperar a pose a partir de **três marcadores**, atribuindo-lhes o rótulo de confiança reduzida. Quadros sem, ao menos, três marcadores utilizáveis são descartados, com o motivo correspondente registrado no log e no arquivo `skipped.txt`.
 
-Com 3 pontos há duas ambiguidades: qual marcador do tipo que aparece uma só vez é ele (o "0" ou o "1") e o P3P devolve até 4 soluções. O programa testa todas as hipóteses e fica com a pose mais próxima da de um **quadro vizinho com 4 marcadores**, descartando poses fisicamente impossíveis (câmera abaixo da folha). Detalhes de implementação em [`PoseEstimator.estimateFromThree`](src/main/java/scan3d/PoseEstimator.java) e [`Pipeline`](src/main/java/scan3d/Pipeline.java):
+A utilização de apenas três pontos introduz duas fontes de ambiguidade: a identidade ("0" ou "1") do marcador de um tipo que aparece uma única vez, e a multiplicidade de soluções do problema P3P (*Perspective-3-Point*), que pode retornar até quatro soluções distintas. O sistema testa exaustivamente todas as hipóteses e seleciona a pose mais próxima à de um **quadro vizinho com quatro marcadores**, descartando soluções fisicamente inválidas. Os detalhes de implementação constam em [`PoseEstimator.estimateFromThree`](src/main/java/scan3d/PoseEstimator.java) e [`Pipeline`](src/main/java/scan3d/Pipeline.java):
 
-- A referência precisa estar a até `--max-gap` quadros (padrão 3). A pose só é aceita se ficar a até 60 mm por quadro de distância e 30° da referência.
-- Quadros de 3 marcadores já resolvidos servem de referência aos seguintes, em camadas, até 8 saltos. Cada pose vem de um P3P independente (a referência só desempata), então o erro não se acumula.
-- Não há erro de reprojeção com 3 pontos (o ajuste é exato), então essa coluna fica vazia; o que há é a distância até a referência.
-- A pose (e não a detecção) é o que define onde o objeto pode estar na imagem: o contorno do objeto só vale dentro do volume sobre o retângulo dos marcadores reprojetado com ela, o que funciona também quando um marcador está escondido.
+- A referência utilizada deve estar a, no máximo, `--max-gap` quadros de distância (padrão: 3). A pose somente é aceita caso não exceda 60 mm por quadro de distância e 30° de diferença angular em relação à referência.
+- Quadros de três marcadores já resolvidos podem servir de referência para os quadros subsequentes, em camadas sucessivas, até um limite de 8 saltos. Como cada pose deriva de uma solução P3P independente — a referência atua apenas como critério de desempate —, o erro não se acumula ao longo da cadeia.
+- Não há erro de reprojeção associado a soluções com três pontos, uma vez que o ajuste é exato; nesse caso, a coluna correspondente permanece vazia, sendo substituída pela distância até a referência.
+- A pose que determina a região da imagem em que o objeto pode se encontrar: o contorno do objeto é considerado válido apenas dentro do volume delimitado pelo retângulo dos marcadores reprojetado segundo essa pose, o que permanece válido mesmo quando um dos marcadores está oculto.
 
-Uma heurística mais simples (decidir a identidade do marcador só pela geometria) acertou apenas 71%, por isso o teste de hipóteses.
+Uma heurística mais simples, baseada exclusivamente em critérios geométricos para determinar a identidade do marcador, obteve uma taxa de acerto de apenas 71%, o que motivou a adoção do procedimento de teste de hipóteses descrito acima.
 
-Resultado nas 129 fotos de exemplo: **72 quadros com 4 marcadores + 44 com 3 = 116 usados (90%)**, contra 72 (56%) sem essa etapa. Nos 44, a diferença para a referência é de 20 mm (mediana), 56 mm (p90) e 132 mm (máx.). Para usar só quadros completos, passe `--min-markers 4`.
+Das 129 fotografias de exemplo, obtiveram-se 72 quadros com quatro marcadores e 44 com três, totalizando **116 quadros aproveitados (90%)**. Entre os 44 quadros recuperados, a diferença em relação à referência é de 20 mm (mediana), 56 mm (percentil 90) e 132 mm (máximo). Para restringir o processamento apenas a quadros completos, utiliza-se a opção `--min-markers 4`.
 
-Nas saídas, a confiança aparece como coluna `markers`/`confidence` em `poses.csv`, propriedade `markers` no `cloud.ply`, com destaque em **laranja** com aviso na foto e na GUI.
+Nas saídas do sistema, o nível de confiança é registrado na coluna `markers`/`confidence` de `poses.csv` e na propriedade `markers` de `cloud.ply`, sendo destacado em **laranja**, com aviso correspondente, tanto na fotografia anotada quanto na interface gráfica.
 
 ## Interface gráfica
 
@@ -225,32 +225,26 @@ Nas saídas, a confiança aparece como coluna `markers`/`confidence` em `poses.c
 
 <p align="center"><img src="docs/img/gui-processamento.png" width="85%" alt="Aba Processamento: log do processamento e resumo"></p>
 
-- **Processar imagens**: roda o pipeline em segundo plano, com fase atual, barra de progresso e o log dos quadros ignorados. Se a pasta de saída já tem resultado, pede confirmação antes de substituir. Ao terminar, carrega o resultado.
-- **Visualizar**: habilitado quando a pasta de saída já tem `cloud.ply` (por exemplo, de uma execução anterior); abre a nuvem, os quadros e os contornos sem reprocessar.
-- **Abrir pasta de saída**: abre a pasta no Finder.
-- Opções: pasta das fotos, pasta de saída, câmera aproximada ou arquivo de câmera, e aceitar ou não quadros com 3 marcadores.
+- **Processar imagens**: executa o pipeline em segundo plano, exibindo a fase corrente, uma barra de progresso e o log dos quadros descartados. Caso a pasta de saída já contenha resultados, solicita confirmação antes de sobrescrevê-los; ao término, carrega automaticamente o resultado obtido.
+- **Visualizar**: habilitado quando a pasta de saída já contém um arquivo `cloud.ply` (por exemplo, de uma execução anterior); permite abrir a nuvem, os quadros e os contornos sem necessidade de reprocessamento.
+- **Abrir pasta de saída**: abre a pasta correspondente no Finder.
+- Opções disponíveis: pasta de origem das fotografias, pasta de saída, uso de câmera aproximada ou de arquivo de calibração, e aceitação (ou não) de quadros com três marcadores.
 
-A aba **Nuvem de pontos** é um visualizador próprio em JavaFX (sem OpenGL): projeta os pontos com perspectiva num buffer de pixels com z-buffer. Arrastar gira, Shift/botão direito move, a roda dá zoom e duplo clique reinicia. Dá para colorir por altura, por quadro (ordem da volta) ou por confiança da pose, esconder os pontos de 3 marcadores, ocultar os 1% mais extremos e mudar o tamanho do ponto.
+A aba **Nuvem de pontos** consiste em um visualizador próprio, implementado em JavaFX sem uso de OpenGL, que projeta os pontos em perspectiva sobre um buffer de pixels com teste de profundidade (*z-buffer*). A interação inclui rotação por arraste do mouse, deslocamento via Shift ou botão direito, zoom pela roda do mouse e reinicialização por duplo clique. É possível colorir os pontos por altura, por quadro (ordem de captura ao longo da volta) ou por confiança da pose, além de ocultar os pontos provenientes de quadros com três marcadores, filtrar o 1% de pontos mais extremos e ajustar o tamanho de exibição dos pontos.
 
 <p align="center"><img src="docs/img/gui-nuvem.png" width="85%" alt="Aba Nuvem de pontos"></p>
 
-A aba **Quadros** lista todas as fotos (verde = 4 marcadores, laranja = 3, vermelho = ignorado) e mostra a foto anotada e o motivo. Nos quadros com pose, a anotação traz os marcadores, a moldura e os eixos (formas descartadas aparecem em cinza); nos ignorados, traz todas as formas detectadas (triângulos `T` em magenta, quadrados `S` em amarelo), para verificar o que o detector identificou.
+A aba **Quadros** apresenta a listagem completa das fotografias (verde: quatro marcadores; laranja: três marcadores; vermelho: quadro descartado), exibindo a imagem anotada e o motivo do descarte, quando aplicável. Para quadros com pose estimada, a anotação inclui os marcadores, a moldura do modelo e os eixos de coordenadas (formas descartadas são exibidas em cinza); para quadros descartados, são exibidas todas as formas detectadas (triângulos em magenta, identificados por `T`; quadrados em amarelo, identificados por `S`), permitindo a verificação do que foi identificado pelo detector.
 
 <p align="center"><img src="docs/img/gui-quadros.png" width="85%" alt="Aba Quadros"></p>
 
-A aba **Contornos** lista os quadros com contorno (o número ao lado é a quantidade de pixels) e mostra o contorno do objeto **sobre a foto** (em vermelho, com a foto escurecida) ou **só o contorno**, em preto e branco, como gravado em `output/contours`. Serve para conferir se ele está sobre o objeto e ver o que entrou junto, como a borda de trás da folha e detalhes do rótulo.
+A aba **Contornos** lista os quadros para os quais foi extraído um contorno (o número exibido ao lado indica a quantidade de pixels) e permite visualizar o contorno do objeto sobreposto à fotografia (em vermelho, com a imagem escurecida) ou isoladamente, em preto e branco, tal como gravado em `output/contours`. Essa visualização possibilita verificar a correspondência entre o contorno e o objeto, bem como identificar elementos indevidamente incluídos, como a borda posterior da folha e detalhes do rótulo.
 
 <p align="center"><img src="docs/img/gui-contornos.png" width="85%" alt="Aba Contornos: contorno do pote sobre a foto"></p>
 
-Observações:
+## Resultados e limitações
 
-- A nuvem exibida é a de lâminas. Os eixos e as unidades mostrados são em pixels de referência; o cabeçalho do PLY, exibido na base da janela, traz a escala.
-- Como o JavaFX traz bibliotecas nativas por sistema, o jar gerado por `mvn package` só funciona no sistema em que foi compilado.
-- Modos de teste da janela, usados para gerar as capturas acima: `--load` (abre já com os resultados), `--process` (dispara o mesmo caminho do botão) e `--screenshot ARQUIVO --tab N` (grava a captura e fecha; abas: 0 Processamento, 1 Nuvem, 2 Quadros, 3 Contornos).
-
-## O que funciona e o que não funciona
-
-Resultado de `./scan3d.sh scan --approx-camera` sobre as 129 fotos de `in/`:
+Resultados obtidos pela execução de `./scan3d.sh scan --approx-camera` sobre o conjunto de 129 fotografias em `in/`:
 
 | Etapa | Estado |
 | --- | --- |
@@ -258,18 +252,18 @@ Resultado de `./scan3d.sh scan --approx-camera` sobre as 129 fotos de `in/`:
 | Quadros com 3 marcadores | ✅ 44 recuperados, marcados como confiança menor (validação e limites em [Quadros com 3 marcadores](#quadros-com-3-marcadores)) |
 | Quadros ignorados | 14 de 129, com motivo (115 usados; 6 quadros com 2 triângulos + 3 quadrados foram recuperados descartando a forma a mais). Restam 2 com 1 triângulo e 3 quadrados, 3 com 1 e 1, e 9 com 3 marcadores sem referência confiável |
 | Pose | ✅ erro de reprojeção mediano 1,2 px (câmera aproximada); ⚠️ 26 px com o `TextMatrix.txt` original |
-| Contorno do objeto | ✅ presente em todos os 116 quadros, contínuo na maioria (mediana de ~1,4 mil pixels); ⚠️ com a borda de trás da folha e detalhes do rótulo em alguns quadros. |
+| Contorno do objeto | ✅ presente em todos os 116 quadros, contínuo na maioria (mediana de ~1,4 mil pixels); ⚠️ com a borda de trás da folha e detalhes do rótulo em alguns quadros |
 | Nuvem de pontos | ✅ 37.860 pontos com a forma do pote, raio estável (dispersão de 0,6 a 1,8 mm), cobertura de 296° de 360°; ⚠️ aproximação para objetos que não são de revolução |
 | Volta de 360° | ✅ o ângulo `rz` da pose cobre −179° a +180° |
-| Interface gráfica e visualizador | ✅ processar, visualizar, navegar quadros (testado via captura de tela; o clique do usuário nos botões não foi exercitado por mim) |
+| Interface gráfica e visualizador | ✅ processar, visualizar, navegar quadros (testado via captura de tela; a interação direta do usuário com os botões não foi exercitada pelo autor) |
 
 Limitações e pontos de atenção:
 
-- Use `--approx-camera` nas fotos de exemplo e recalibre para os testes práticos.
-- **Distorção da lente ignorada** (`distCoeffs` = 0). O `calibrate` imprime os coeficientes, mas o pipeline ainda não os usa.
-- **A nuvem por lâminas é exata só para objetos de revolução.** Para outros formatos o ponto da borda é posto no plano do eixo, então faces planas ficam "estufadas" e partes côncavas somem. O método geral é o *visual hull*.
-- **A qualidade da nuvem depende de `K`.** Com o `TextMatrix.txt` a pose sai imprecisa; as fotos de exemplo foram processadas com a câmera aproximada. Recalibre antes dos testes práticos.
-- Falhas são esperadas: o programa ignora os quadros que não consegue processar e segue com os demais.
+- Recomenda-se o uso de `--approx-camera` para as fotografias de exemplo, sendo a recalibração necessária para testes práticos.
+- **A distorção da lente não é considerada** (`distCoeffs` = 0). O comando `calibrate` calcula e imprime os coeficientes correspondentes, mas o pipeline ainda não os incorpora ao processamento.
+- **A nuvem obtida pelo método de lâminas é exata apenas para objetos de revolução.** Para outras geometrias, o ponto de borda é posicionado no plano do eixo, o que faz com que faces planas apareçam infladas e regiões côncavas não sejam representadas. O método geral correspondente é o *visual hull*.
+- **A qualidade da nuvem resultante depende diretamente da precisão de `K`.** Com o arquivo `TextMatrix.txt` original, a pose estimada apresenta imprecisão considerável; as fotografias de exemplo foram processadas com câmera aproximada. Recomenda-se a recalibração antes da realização de testes práticos.
+- Falhas pontuais são esperadas: o sistema descarta os quadros que não consegue processar corretamente e prossegue com os demais.
 
 ## Estrutura do repositório
 
@@ -283,12 +277,12 @@ Limitações e pontos de atenção:
 | [`in/800x480 com objeto`](in/800x480%20com%20objeto) | 129 fotos de teste (JPG 800×480) de um pote sobre a folha |
 | [`out/`](out) | 10 saídas históricas (`*.matMask.jpg`), os melhores quadros do início da sequência. **Não é** a saída do programa atual |
 | `output/` | Saída do programa atual (ignorada pelo git): `annotated/`, `contours/`, `poses.csv`, `cloud.ply`, `skipped.txt` |
-| [`docs/img`](docs/img) | Figuras usadas neste README |
+| [`docs/img`](docs/img) | Figuras utilizadas neste documento |
 | [`TextMatrix.txt`](TextMatrix.txt) | Matriz intrínseca original (9 valores, calibrada em outra resolução) |
-| [`lib/`](lib) | Legado: `opencv-2413.jar` e `.so` de Linux do OpenCV 2.4. **Não é mais usado** |
+| [`lib/`](lib) | Legado: `opencv-2413.jar` e `.so` de Linux do OpenCV 2.4. **Não é mais utilizado** |
 | [`install-linux.md`](install-linux.md) | Passo a passo histórico (Ubuntu 16.04, Eclipse Luna, OpenCV 2.4) |
 
-## Como executar
+## Instalação e execução
 
 ### Instalação no macOS
 
@@ -296,15 +290,15 @@ Limitações e pontos de atenção:
 brew install openjdk@21 maven
 ```
 
-O OpenCV **não precisa ser instalado**: o pacote Maven `org.openpnp:opencv` traz a biblioteca nativa (inclusive para macOS ARM64) e o programa a extrai sozinho. O JDK 21 do Homebrew é *keg-only*, então o `scan3d.sh` já o localiza; para usá-lo no terminal:
+A instalação do OpenCV **não é necessária**: o pacote Maven `org.openpnp:opencv` inclui a biblioteca nativa correspondente (inclusive para macOS ARM64), sendo esta extraída automaticamente pelo programa. Como o JDK 21 distribuído pelo Homebrew é *keg-only*, o script `scan3d.sh` já realiza sua localização automaticamente; para utilizá-lo diretamente no terminal:
 
 ```bash
 echo 'export JAVA_HOME=/opt/homebrew/opt/openjdk@21' >> ~/.zshrc
 ```
 
-Nada foi alterado no `~/.zshrc` automaticamente.
+Nenhuma alteração é realizada automaticamente no arquivo `~/.zshrc`.
 
-### Executar
+### Execução
 
 ```bash
 ./scan3d.sh gui                           # janela: Processar imagens / Visualizar
@@ -315,7 +309,7 @@ Nada foi alterado no `~/.zshrc` automaticamente.
 ./scan3d.sh --help
 ```
 
-O primeiro `scan3d.sh` compila (baixa dependências e gera um jar de ~120 MB, pois embute as bibliotecas nativas do OpenCV de todos os sistemas e as do JavaFX do sistema atual). Opções de `scan`: `--in`, `--out`, `--camera`, `--approx-camera`, `--limit N`, `--min-markers 3|4` (padrão 3) e `--max-gap N` (padrão 3). Saída:
+Na primeira execução, o script `scan3d.sh` realiza a compilação do projeto (download das dependências e geração de um arquivo jar de aproximadamente 120 MB, uma vez que este incorpora as bibliotecas nativas do OpenCV para todos os sistemas suportados e as do JavaFX para o sistema corrente). As opções disponíveis para o comando `scan` são: `--in`, `--out`, `--camera`, `--approx-camera`, `--limit N`, `--min-markers 3|4` (padrão 3) e `--max-gap N` (padrão 3). Os arquivos de saída gerados são:
 
 | Arquivo | Conteúdo |
 | --- | --- |
@@ -325,20 +319,20 @@ O primeiro `scan3d.sh` compila (baixa dependências e gera um jar de ~120 MB, po
 | `output/cloud.ply` | nuvem acumulada, com as propriedades `frame` e `markers` |
 | `output/skipped.txt` | um quadro ignorado por linha, com o motivo |
 
-### Para os testes práticos
+### Recomendações para testes práticos
 
-1. Fotografe um **tabuleiro de xadrez** impresso (ex.: 8×6 cantos internos, quadrados de 50 mm) em 15 ou mais posições, **na mesma resolução** que usará para o objeto, e rode `calibrate`.
-2. Imprima o gabarito ([`docs/img/A4-base-scan3D.png`](docs/img/A4-base-scan3D.png)) em A4 **sem escala/ajuste de página** e confira com régua os 187 × 161 mm entre os centros dos marcadores; se diferir, altere `WIDTH_MM`/`HEIGHT_MM` em [`PoseEstimator`](src/main/java/scan3d/PoseEstimator.java).
-3. Sempre que der, deixe **os quatro marcadores visíveis** em cada foto e o objeto no centro, sem cobrir nenhum. Quadros com 3 ainda servem (confiança menor), mas com menos que isso o quadro é ignorado. Para o encadeamento funcionar, fotografe em sequência com a câmera se movendo pouco entre fotos (aqui, ~6 mm por quadro).
-4. Use luz difusa: sombras e reflexos quebram os contornos.
+1. Fotografar o **tabuleiro de xadrez** impresso ([`docs/img/A4-chessboard.png`](docs/img/A4-chessboard.png)) em 15 ou mais posições distintas, **na mesma resolução** a ser utilizada na captura do objeto, e executar o comando `calibrate`.
+2. Imprimir o gabarito ([`docs/img/A4-base-scan3D.png`](docs/img/A4-base-scan3D.png)) em A4, **sem escala ou ajuste automático de página**, e verificar com régua a distância de 187 × 161 mm entre os centros dos marcadores; caso haja divergência, ajustar as constantes `WIDTH_MM`/`HEIGHT_MM` em [`PoseEstimator`](src/main/java/scan3d/PoseEstimator.java).
+3. Sempre que possível, manter **os quatro marcadores visíveis** em cada fotografia, com o objeto centralizado e sem obstruir nenhum deles. Quadros com apenas três marcadores ainda são aproveitáveis (confiança reduzida), sendo descartados os quadros com menos que isso. Para que o encadeamento entre quadros funcione adequadamente, recomenda-se fotografar em sequência, com deslocamentos pequenos da câmera entre capturas (aproximadamente 6 mm por quadro, no conjunto de exemplo).
+4. Utilizar iluminação difusa: sombras e reflexos comprometem a extração dos contornos.
 
-## Próximos passos
+## Trabalhos futuros
 
-Em ordem de retorno sobre esforço:
+Ordenados por relação estimada entre esforço de implementação e retorno esperado:
 
-1. **Recalibrar** na resolução real e passar os `distCoeffs` ao `solvePnP` e à inversão.
-2. **Visual hull** (interseção das silhuetas esticadas) para objetos que não são de revolução; a lâmina infla faces planas e perde concavidades. Precisa de silhueta preenchida (item 3).
-3. **Segmentar o objeto contra o papel branco** (limiar/GrabCut dentro da região reprojetada) para obter uma silhueta **preenchida**, necessária ao *visual hull* e sem as linhas da borda da folha que ainda escapam do contorno atual.
-4. **Formas a mais com 1 triângulo ou 1 quadrado** (2 quadros hoje): a razão de distâncias não existe; seria preciso outro critério, como o erro de reprojeção de cada combinação.
-5. Filtrar/ponderar pontos de quadros de confiança menor na reconstrução e medir o efeito com fotos reais.
-6. Portar para Android (OpenCV Android + a mesma lógica), depois de validar a matemática.
+1. **Recalibração** na resolução real da câmera e incorporação dos coeficientes de distorção (`distCoeffs`) ao `solvePnP` e à etapa de inversão de raios.
+2. **Visual hull** (interseção de silhuetas estendidas) para objetos que não são sólidos de revolução, uma vez que o método de lâminas infla faces planas e não captura concavidades. Depende da obtenção de silhuetas preenchidas (item 3).
+3. **Segmentação do objeto** em relação ao fundo branco da folha (por limiarização ou GrabCut, dentro da região reprojetada), de modo a obter uma silhueta **preenchida** — pré-requisito do *visual hull* — livre das linhas de borda da folha ainda presentes no contorno atual.
+4. **Tratamento de quadros com formas excedentes** na presença de apenas um triângulo ou um quadrado (2 quadros no conjunto atual): nesses casos, a razão de distâncias utilizada como critério não está definida, sendo necessário um critério alternativo, como o erro de reprojeção de cada combinação possível.
+5. Filtragem ou ponderação dos pontos provenientes de quadros de confiança reduzida na etapa de reconstrução, com avaliação do efeito correspondente em fotografias reais.
+6. Portabilidade para Android (OpenCV Android, mantendo a mesma lógica de processamento), a ser realizada após a validação completa do equacionamento matemático.
